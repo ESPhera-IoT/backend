@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+
+passlib[bcrypt]
+bcrypt==4.0.1 
+
+paho-mqtt
+cryptography
+
+openai>=1.0.0
+python-dotenv
+pydub
+numpy>=1.23.0
+scipy>=1.10.0
+sounddevice>=0.5.0

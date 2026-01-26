@@ -1,0 +1,13 @@
+backend/.env
+
+backend/**/__pycache__/
+backend/*.py[cod]
+backend/*$py.class
+
+.vscode/
+.idea/
+
+
+backend/dist/
+backend/build/
+backend/*.egg-info/
