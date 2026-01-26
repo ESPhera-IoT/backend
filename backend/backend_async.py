@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import os
 import time
 import shutil
@@ -9,6 +10,8 @@ import crypto_utils
 import database
 import mqtt_service
 import session_manager
+from elevenlabs import ElevenLabs, VoiceSettings
+
 
 # --- KONFIGURACJA ---
 HOST = '0.0.0.0'
@@ -25,6 +28,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 client = AsyncOpenAI(api_key=api_key) if api_key else None
+
+ELEVEN_LABS_API_KEY = os.getenv("ELEVEN_LABS_API_KEY")
+eleven_labs_client = ElevenLabs(api_key=ELEVEN_LABS_API_KEY)
+
 
 async def process_audio(input_path, output_path, device_id):
     """Logika AI (lub Symulacja)"""
@@ -70,6 +77,34 @@ async def process_audio(input_path, output_path, device_id):
 
         # 3. TTS
         temp_mp3 = output_path.replace(".wav", ".mp3")
+        
+        # TTS WITH ELEVEN LABS
+        audio_iterator = await eleven_labs_client.text_to_speech.convert(
+            text=response_text,
+            voice_id="g8ZOdhoD9R6eYKPTjKbE",
+            model_id="eleven_v3", # v3 is great, but ensure your SDK version supports it
+            voice_settings=VoiceSettings(
+                stability=0.5,
+                similarity_boost=0.8,
+            )
+        )
+
+        with open(temp_mp3, "wb") as f:
+            async for chunk in audio_iterator:
+                f.write(chunk)
+
+        def convert():
+            sound = AudioSegment.from_mp3(temp_mp3)
+            sound = sound.set_frame_rate(ESP_SAMPLE_RATE).set_channels(1).set_sample_width(2)
+            sound.export(output_path, format="wav")
+            if os.path.exists(temp_mp3):
+                os.remove(temp_mp3)
+
+        await asyncio.to_thread(convert)
+        return True
+    
+
+        # TTS WITH OPENAI
         response = await client.audio.speech.create(
             model="tts-1", 
             voice="alloy", 

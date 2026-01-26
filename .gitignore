@@ -11,3 +11,7 @@ backend/*$py.class
 backend/dist/
 backend/build/
 backend/*.egg-info/
+
+backend/esphera_pro.db
+backend/recordings/*
+backend/responses/*
