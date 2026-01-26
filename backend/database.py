@@ -16,6 +16,28 @@ def get_connection():
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
+def reset_db():
+    """Całkowite czyszczenie bazy i re-inicjalizacja"""
+    with db_lock:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Pobieramy nazwy wszystkich tabel
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+        tables = cursor.fetchall()
+        
+        # Wyłączamy klucze obce na chwilę, żeby móc usunąć tabele w dowolnej kolejności
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        for table in tables:
+            cursor.execute(f"DROP TABLE IF EXISTS {table['name']}")
+        
+        conn.commit()
+        conn.close()
+        print("[DB] Wszystkie tabele usunięte.")
+    
+    # Tworzymy tabele na nowo
+    init_db()
+
 def init_db():
     with db_lock:
         conn = get_connection()

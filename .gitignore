@@ -15,3 +15,7 @@ backend/*.egg-info/
 backend/esphera_pro.db
 backend/recordings/*
 backend/responses/*
+backend/*db-wal
+backend/*db-shm
+backend/pytanie.wav
+backend/finalna_odpowiedz.wav

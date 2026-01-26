@@ -72,7 +72,7 @@ def simulate_full_flow():
     print("[KULA] Upload zakończony. Czekam na przetworzenie...")
 
     # --- ETAP 3: OCZEKIWANIE NA AI ---
-    if not ready_event.wait(50): # Dajemy 50s na symulację AI
+    if not ready_event.wait(100): # Dajemy 100s na symulację AI
         print("Timeout READY! Backend nie odpowiedział."); return
 
     # --- ETAP 4: DOWNLOAD ---

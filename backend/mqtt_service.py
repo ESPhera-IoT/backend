@@ -1,16 +1,20 @@
 import json
 import asyncio
+from dotenv import load_dotenv
 import paho.mqtt.client as mqtt
 import database
 import crypto_utils
 import session_manager
 import time
+import os
 
 # --- KONFIGURACJA ---
 BROKER = "127.0.0.1"
 PORT = 1883
 
-MY_LOCAL_IP = "192.168.1.236"
+load_dotenv()
+
+MY_LOCAL_IP = os.getenv("LOCAL_IP")
 TCP_PORT = 26358             # Port TCP
 
 # Tematy (Topics)

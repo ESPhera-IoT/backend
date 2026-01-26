@@ -13,17 +13,6 @@ import session_manager
 from elevenlabs import ElevenLabs, VoiceSettings
 
 
-# --- KONFIGURACJA ---
-HOST = '0.0.0.0'
-PORT = 26358
-ESP_SAMPLE_RATE = 44100
-INPUT_DIR = "recordings"
-OUTPUT_DIR = "responses"
-
-MY_LOCAL_IP = "192.168.1.236"
-
-os.makedirs(INPUT_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
@@ -31,6 +20,18 @@ client = AsyncOpenAI(api_key=api_key) if api_key else None
 
 ELEVEN_LABS_API_KEY = os.getenv("ELEVEN_LABS_API_KEY")
 eleven_labs_client = ElevenLabs(api_key=ELEVEN_LABS_API_KEY)
+
+
+# --- KONFIGURACJA ---
+HOST = '0.0.0.0'
+PORT = 26358
+ESP_SAMPLE_RATE = 44100
+INPUT_DIR = "recordings"
+OUTPUT_DIR = "responses"
+MY_LOCAL_IP = os.getenv("LOCAL_IP")
+
+os.makedirs(INPUT_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 async def process_audio(input_path, output_path, device_id):
@@ -79,18 +80,20 @@ async def process_audio(input_path, output_path, device_id):
         temp_mp3 = output_path.replace(".wav", ".mp3")
         
         # TTS WITH ELEVEN LABS
-        audio_iterator = await eleven_labs_client.text_to_speech.convert(
+        audio_iterator = await asyncio.to_thread(
+            eleven_labs_client.text_to_speech.convert,
             text=response_text,
             voice_id="g8ZOdhoD9R6eYKPTjKbE",
-            model_id="eleven_v3", # v3 is great, but ensure your SDK version supports it
+            model_id="eleven_multilingual_v2", # Note: double check if 'eleven_v3' is released/supported in your SDK
             voice_settings=VoiceSettings(
                 stability=0.5,
                 similarity_boost=0.8,
+                speed=1.2
             )
         )
 
         with open(temp_mp3, "wb") as f:
-            async for chunk in audio_iterator:
+            for chunk in audio_iterator:
                 f.write(chunk)
 
         def convert():
