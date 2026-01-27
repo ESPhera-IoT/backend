@@ -12,7 +12,8 @@ import database
 import backend_async
 import mqtt_service
 from pydantic import BaseModel
-import simulate_esp # <--- IMPORTUJEMY NASZ SYMULATOR
+# TO TESTÓW
+# import simulate_esp
 
 # --- KONFIGURACJA ---
 app = FastAPI(title="ESPhera IoT Server")
@@ -197,19 +198,23 @@ async def update_config(
     request: Request, 
     device_id: str = Form(...), 
     led_intensity: int = Form(...),
-    ai_model: str = Form(...),
+    sound_model_id: str = Form(...),
+    sleep_timeout: int = Form(...),
     system_prompt: str = Form(...)
 ):
     user_email = get_current_user_from_cookie(request)
     if not user_email: return RedirectResponse("/")
     
     # Zapisz w bazie
-    database.update_device_config(device_id, led_intensity, ai_model, system_prompt)
+    database.update_device_config(device_id, led_intensity, sound_model_id, sleep_timeout, system_prompt)
     
     # MQTT Live Update
     if mqtt_service.client:
         import json
-        msg = json.dumps({"led": led_intensity})
+        msg = json.dumps({
+            "led_intensity": led_intensity,
+            "sleep_timeout": sleep_timeout,   
+        })
         mqtt_service.client.publish(f"devices/{device_id}/config", msg)
     
     return RedirectResponse(url="/dashboard", status_code=303)
@@ -258,6 +263,108 @@ async def api_login(form_data: OAuth2PasswordRequestForm = Depends()):
     return {"access_token": access_token, "token_type": "bearer"}
 
 
+class DeviceConfigUpdate(BaseModel):
+    # Opcjonalne pola, bo użytkownik może nie chcieć zmieniać wszystkiego
+    # (chociaż we Flutter wysyłasz cały obiekt, więc przyjdzie wszystko)
+    sound_model_id: Optional[str] = None
+    sleep_timeout: Optional[int] = None
+    led_intensity: Optional[int] = None
+    system_prompt: Optional[str] = None
+
+
+@app.post("/api/devices/{device_id}/config", status_code=200)
+async def api_update_device_config(
+    config_data: DeviceConfigUpdate,
+    device_id: str,
+    current_user_email: str = Depends(get_current_user_api)
+):
+    """
+    Endpoint dla aplikacji mobilnej (JSON).
+    Aktualizuje konfigurację i wysyła powiadomienie MQTT.
+    """
+
+    # 1. Weryfikacja użytkownika i własności urządzenia
+    user = database.get_user_by_email(current_user_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Sprawdź czy to urządzenie należy do tego użytkownika!
+    # To bardzo ważne zabezpieczenie.
+    device = database.get_device_by_id(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Zakładam, że w obiekcie device masz pole 'user_id' lub 'owner_id'
+    if str(device['user_id']) != str(user['id']):
+        raise HTTPException(status_code=403, detail="Not authorized to configure this device")
+
+    # 2. Aktualizacja w bazie danych
+    # Używamy tych samych funkcji co w wersji webowej
+    # Jeśli wartości są None (np. Flutter ich nie wysłał), używamy starych lub domyślnych
+    
+    # Pobieramy stare wartości jeśli nowe nie przyszły (opcjonalne, zależnie od logiki update_device_config)
+    # Tutaj zakładam, że update_device_config obsługuje nadpisywanie.
+    
+    database.update_device_config(
+        device_id=device_id,
+        led_intensity=config_data.led_intensity,
+        sound_model_id=config_data.sound_model_id,
+        sleep_timeout=config_data.sleep_timeout,
+        system_prompt=config_data.system_prompt
+    )
+
+    # 3. MQTT Live Update
+    # Wysyłamy wiadomość do urządzenia, żeby natychmiast zmieniło ustawienia
+    if mqtt_service.client:
+        import json
+        
+        # Budujemy payload dla MQTT
+        mqtt_msg = {
+            "led_intensity": config_data.led_intensity,
+            "sleep_timeout": config_data.sleep_timeout,
+        }
+        
+        # Jeśli urządzenie obsługuje zmianę głosu "w locie", dodaj to też:
+        if config_data.sound_model_id:
+             mqtt_msg["sound_model"] = config_data.sound_model_id
+
+        mqtt_service.client.publish(f"devices/{device_id}/config", json.dumps(mqtt_msg))
+
+    return {"message": "Configuration updated successfully"}
+
+
+
+@app.get("/api/devices/{device_id}/config", status_code=200)
+async def api_get_device_config(
+    device_id: str,
+    current_user_email: str = Depends(get_current_user_api)
+):
+    """Zwraca konfigurację urządzenia w formacie JSON"""
+    # Weryfikacja użytkownika i własności urządzenia
+    user = database.get_user_by_email(current_user_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    device = database.get_device_by_id(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    if str(device['user_id']) != str(user['id']):
+        raise HTTPException(status_code=403, detail="Not authorized to view this device")
+
+    config = database.get_device_config(device_id)
+    return config
+
+
+@app.post("/api/devices", status_code=200)
+async def api_devices(
+    current_user_email: str = Depends(get_current_user_api)
+):
+    # Weryfikacja tokenu JWT z ciasteczka
+    devices = database.get_user_devices(current_user_email)
+    return [{"id": d['device_id'], "status": d['status'], "user_id": d['user_id']} for d in devices]
+
+
 class DeviceRegister(BaseModel):
     aes_key: str  # Klucz wysyłany przez aplikację mobilną (base64 lub hex)
     name: str = "Nowa Kula" # Opcjonalna nazwa
@@ -265,7 +372,6 @@ class DeviceRegister(BaseModel):
 @app.post("/api/device/register", status_code=201)
 async def api_register_device(
     device_data: DeviceRegister, 
-    background_tasks: BackgroundTasks, # <--- Wstrzykujemy obsługę zadań w tle
     current_user_email: str = Depends(get_current_user_api)
 ):
     """
@@ -285,17 +391,6 @@ async def api_register_device(
         name=device_data.name
     )
 
-    background_tasks.add_task(
-        simulate_esp.run_esp_provisioning_task, 
-        device_id=str(device_id), 
-        aes_key=device_data.aes_key
-    )
-
-    
-    if not device_id:
-        raise HTTPException(status_code=500, detail="Could not create device record")
-
-    return {"message": "Device registered, waiting for verification", "device_id": device_id}
 
 
 @app.get("/api/device/{device_id}/status")
@@ -323,12 +418,11 @@ async def api_check_device_status(
     # 4. Zwróć status ("PENDING" lub "PAIRED")
     return {"device_id": device_id, "status": device['status']}
 
-
 @app.get("/api/devices")
 async def api_get_devices(current_user_email: str = Depends(get_current_user_api)):
     """Zwraca urządzenia. Wymaga nagłówka 'Authorization: Bearer <token>'"""
     devices = database.get_user_devices(current_user_email)
-    return [{"id": d['device_id'], "status": d['status']} for d in devices]
+    return [{"id": d['device_id'], "status": d['status'], "user_id": d['user_id']} for d in devices]
 
 if __name__ == "__main__":
     uvicorn.run("webapp:app", host="0.0.0.0", port=8001, reload=False)

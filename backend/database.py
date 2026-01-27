@@ -69,11 +69,9 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS config (
                 device_id TEXT PRIMARY KEY,
-                wifi_ssid TEXT,
-                wifi_password TEXT,
-                sound_model_id TEXT DEFAULT 'alloy',
+                sound_model_id TEXT DEFAULT 'g8ZOdhoD9R6eYKPTjKbE',
                 led_intensity INTEGER DEFAULT 50,
-                ai_model TEXT DEFAULT 'gpt-4o-mini',
+                sleep_timeout INTEGER DEFAULT 60,
                 system_prompt TEXT DEFAULT 'Jesteś pomocnym asystentem głosowym.',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(device_id) REFERENCES devices(device_id) ON DELETE CASCADE
@@ -152,16 +150,16 @@ def register_or_claim_device(device_id, aes_key, user_email):
         finally:
             conn.close()
 
-def update_device_config(device_id, led_val, ai_model, sys_prompt):
+def update_device_config(device_id, led_intensity, sound_model_id, sleep_timeout, system_prompt):
     """Zapisuje nową konfigurację (LED + AI)"""
     with db_lock:
         conn = get_connection()
         try:
             conn.execute('''
                 UPDATE config 
-                SET led_intensity = ?, ai_model = ?, system_prompt = ? 
+                SET led_intensity = ?, sound_model_id = ?, sleep_timeout = ?, system_prompt = ? 
                 WHERE device_id = ?
-            ''', (led_val, ai_model, sys_prompt, device_id))
+            ''', (led_intensity, sound_model_id, sleep_timeout, system_prompt, device_id))
             conn.commit()
         finally:
             conn.close()
@@ -183,7 +181,7 @@ def get_full_device_info(device_id):
         conn = get_connection()
         try:
             cur = conn.execute('''
-                SELECT d.aes_key, c.ai_model, c.system_prompt 
+                SELECT d.aes_key, c.sound_model_id, c.led_intensity, c.sleep_timeout, c.system_prompt 
                 FROM devices d 
                 JOIN config c ON d.device_id = c.device_id 
                 WHERE d.device_id = ?
@@ -197,7 +195,7 @@ def get_user_devices(user_email):
         conn = get_connection()
         try:
             cur = conn.execute('''
-                SELECT d.*, c.led_intensity, c.ai_model, c.system_prompt 
+                SELECT d.*, c.led_intensity, c.sound_model_id, c.sleep_timeout, c.system_prompt 
                 FROM devices d 
                 LEFT JOIN config c ON d.device_id = c.device_id
                 LEFT JOIN users u ON d.user_id = u.id
@@ -218,6 +216,18 @@ def get_device_auth(device_id):
     with db_lock:
         conn = get_connection()
         cur = conn.execute("SELECT aes_key, status FROM devices WHERE device_id = ?", (device_id,))
+        return cur.fetchone()
+
+def get_device_by_id(device_id):
+    with db_lock:
+        conn = get_connection()
+        cur = conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,))
+        return cur.fetchone()
+
+def get_device_config(device_id):
+    with db_lock:
+        conn = get_connection()
+        cur = conn.execute("SELECT * FROM config WHERE device_id = ?", (device_id,))
         return cur.fetchone()
 
 def update_device_status(device_id, status):

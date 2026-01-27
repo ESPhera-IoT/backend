@@ -1,3 +1,8 @@
+"""
+TO BYLO TYLKO DO TESTÓW - JUZ NIE UZYWANE
+"""
+
+
 import binascii
 import time
 import json

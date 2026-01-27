@@ -45,7 +45,7 @@
                         </span>
                     </div>
 
-                    <div class="mb-3 p-2 bg-light rounded border">
+                    <!-- <div class="mb-3 p-2 bg-light rounded border">
                         <small class="text-muted d-block">Siła Sygnału WiFi (Czujnik)</small>
                         <div class="d-flex align-items-center">
                             <strong class="me-2">{{ device.rssi }} dBm</strong>
@@ -55,7 +55,7 @@
                                     style="width: {{ (device.rssi + 100) }}%"></div> 
                             </div>
                         </div>
-                    </div>
+                    </div> -->
 
                     <hr>
                     
@@ -63,21 +63,33 @@
                         <input type="hidden" name="device_id" value="{{ device.device_id }}">
                         
                         <div class="mb-2">
-                            <label class="form-label small fw-bold">Jasność LED</label>
+                            <label class="form-label small fw-bold">Jasność LED {{ device.led_intensity }}%</label>
                             <input type="range" class="form-range" name="led_intensity" 
                                    min="0" max="100" value="{{ device.led_intensity }}">
                         </div>
 
                         <div class="mb-2">
-                            <label class="form-label small fw-bold">Model AI (Mózg)</label>
-                            <select name="ai_model" class="form-select form-select-sm">
-                                <option value="gpt-4o-nano" {% if device.ai_model == 'gpt-4o-nano' %}selected{% endif %}>
-                                    GPT-4o Nano (Szybki)
+                            <label class="form-label small fw-bold">Czas do uśpienia:</label>
+                            <input type="number" name="sleep_timeout"min="10" max="300" style="text-align: end" value="{{ device.sleep_timeout }}">
+                            <span>s</span>
+                        </div>
+
+                        <div class="mb-2">
+                            <label class="form-label small fw-bold">Głos</label>
+                            <select name="sound_model_id" class="form-select form-select-sm">
+                                <option value="fEfGdiGJK4l3imI70mtC" {% if device.sound_model_id == 'fEfGdiGJK4l3imI70mtC' %}selected{% endif %}>
+                                    MAGDALENA
                                 </option>
-                                <option value="gpt-5-nano" {% if device.ai_model == 'gpt-5-nano' %}selected{% endif %}>
-                                    GPT-5 Nano (Inteligentny)
+                                <option value="o2xdfKUpc1Bwq7RchZuW" {% if device.sound_model_id == 'o2xdfKUpc1Bwq7RchZuW' %}selected{% endif %}>
+                                    PIOTR
                                 </option>
-                                </select>
+                                <option value="g8ZOdhoD9R6eYKPTjKbE" {% if device.sound_model_id == 'g8ZOdhoD9R6eYKPTjKbE' %}selected{% endif %}>
+                                    TOMASZ
+                                </option>
+                                <option value="hIssydxXZ1WuDorjx6Ic" {% if device.sound_model_id == 'hIssydxXZ1WuDorjx6Ic' %}selected{% endif %}>
+                                    ADAM
+                                </option>
+                            </select>
                         </div>
 
                         <div class="mb-3">

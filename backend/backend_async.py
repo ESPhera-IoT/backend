@@ -13,7 +13,6 @@ import session_manager
 from elevenlabs import ElevenLabs, VoiceSettings
 
 
-
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 client = AsyncOpenAI(api_key=api_key) if api_key else None

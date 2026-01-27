@@ -26,12 +26,10 @@ client = None # Globalna referencja
 
 # --- LOGIKA BIZNESOWA MQTT ---
 
-
 TOPIC_PROVISION = "devices/provisioning"
-
-def handle_provisioning(topic, payload_bytes):
+def handle_provisioning(header_bytes, payload_bytes):
     """
-    Kula wysyła zaszyfrowany (TIME + 'ESPHERA')
+    Kula wysyła header z (TIME + 'ESPHERA')
     Topic: devices/provisioning
     """
     try:
@@ -45,18 +43,18 @@ def handle_provisioning(topic, payload_bytes):
         for device in pending_devices:
             aes_key = device['aes_key']
             try:
-                decrypted_text = crypto_utils.decrypt_aes_ecb(payload_bytes, aes_key)
+                decrypted_text = crypto_utils.decrypt_aes_ecb(header_bytes, aes_key)
                 if "|ESPHERA" in decrypted_text:
                     # sprawdzamy, czy urządzenie ma >5 minut
                     cur_time = int(time.time())
                     timestamp_str = decrypted_text.split('|')[0]
                     if not timestamp_str.isdigit():
                         print("[MQTT] Błąd weryfikacji: Nieprawidłowy timestamp")
-                        break
+                        continue
                     timestamp = int(timestamp_str)
                     if abs(cur_time - timestamp) > 300:
                         print("[MQTT] Błąd weryfikacji: Timestamp poza dozwolonym zakresem")
-                        break
+                        continue
                     device_id = device['device_id']
                     print(f"[MQTT] Dopasowano urządzenie: {device_id}")
                     break
@@ -80,11 +78,10 @@ def handle_provisioning(topic, payload_bytes):
             "payload": payload
         }
         client.publish(response_topic, json.dumps(response_msg))
-
-
-
     except Exception as e:
         print(f"[MQTT] Provisioning Error: {e}")
+
+
 
 def handle_registration(payload):
     """Obsługa rejestracji nowej kuli przez Admina (Appkę)"""
@@ -214,7 +211,7 @@ def on_message(c, userdata, msg):
     topic = msg.topic
     # Dla provisioning payload może być binarny, dla reszty UTF-8 JSON
     if "provisioning" in topic:
-        handle_provisioning(topic, msg.payload) # Przekazujemy bajty
+        handle_provisioning(msg.header, msg.payload) # Przekazujemy bajty
     else:
         # Stara logika dla JSON
         try:
