@@ -1,9 +1,5 @@
-import jwt # PyJWT
-from datetime import datetime, timedelta
-from typing import Optional
-
-from fastapi import FastAPI, Request, Form, Depends, Response, HTTPException, status
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi import FastAPI, Request, Form, Depends, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import uvicorn
@@ -11,75 +7,24 @@ import asyncio
 import database
 import backend_async
 import mqtt_service
-from pydantic import BaseModel
 
 # --- KONFIGURACJA ---
 app = FastAPI(title="ESPhera IoT Server")
 templates = Jinja2Templates(directory="templates")
-
-# Konfiguracja JWT
-SECRET_KEY = "bardzo_tajny_klucz_zmien_go_w_produkcji"  # ZMIEŃ TO!
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-# OAuth2 scheme dla Swagger UI i API
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
-
-# --- FUNKCJE POMOCNICZE JWT ---
-
-def create_access_token(data: dict, expires_delta: timedelta = None):
-    """Tworzy token JWT z czasem wygasania"""
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    
-    # Dodajemy 'exp' (expiration) i 'sub' (subject/email)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def verify_token(token: str):
-    """Dekoduje i weryfikuje token. Zwraca email lub None."""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            return None
-        return email
-    except jwt.ExpiredSignatureError:
-        return None  # Token wygasł
-    except jwt.InvalidTokenError:
-        return None  # Token nieprawidłowy
-
-def get_current_user_from_cookie(request: Request):
-    """Pomocnik dla UI: wyciąga email z ciasteczka JWT"""
-    token = request.cookies.get("access_token")
-    if not token:
-        return None
-    return verify_token(token)
-
-async def get_current_user_api(token: str = Depends(oauth2_scheme)):
-    """Dependency dla API: weryfikuje token Bearer"""
-    email = verify_token(token)
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return email
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # --- ZARZĄDZANIE TŁEM (TCP + MQTT) ---
 @app.on_event("startup")
 async def startup_event():
     """Uruchamia backend asynchroniczny w tle serwera WWW"""
+    # Inicjalizacja bazy
     database.init_db()
     
+    # Start MQTT i TCP jako zadania w tle
     loop = asyncio.get_event_loop()
     loop.create_task(mqtt_service.start_mqtt())
     
+    # Start Serwera TCP (z backend_async.py)
     server = await asyncio.start_server(
         backend_async.handle_client, 
         backend_async.HOST, 
@@ -87,16 +32,12 @@ async def startup_event():
     )
     loop.create_task(server.serve_forever())
     
-    print("--- SYSTEM START: WWW (8001) + TCP (26358) + MQTT ---")
+    print("--- SYSTEM START: WWW (8000) + TCP (26358) + MQTT ---")
 
 # --- OBSŁUGA STRONY WWW (Web UI) ---
 
 @app.get("/", response_class=HTMLResponse)
 async def login_page(request: Request):
-    # Jeśli użytkownik ma już ważny token, przekieruj od razu do dashboardu
-    if get_current_user_from_cookie(request):
-        return RedirectResponse(url="/dashboard", status_code=303)
-
     return """
     <html>
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -131,22 +72,14 @@ async def login(response: Response, username: str = Form(...), password: str = F
             </div>
         """, status_code=400)
 
-    # --- ZMIANA NA JWT ---
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": username}, expires_delta=access_token_expires
-    )
-
     response = RedirectResponse(url="/dashboard", status_code=303)
-    # Ustawiamy JWT w ciasteczku zamiast czystego emaila
-    # httponly=True zwiększa bezpieczeństwo (JS nie ma dostępu do ciasteczka)
-    response.set_cookie(key="access_token", value=access_token, httponly=True)
+    response.set_cookie(key="user_email", value=username)
     return response
 
 @app.get("/logout")
 async def logout():
     response = RedirectResponse(url="/", status_code=303)
-    response.delete_cookie("access_token")
+    response.delete_cookie("user_email")
     return response
 
 @app.get("/register", response_class=HTMLResponse)
@@ -162,9 +95,8 @@ async def register_action(email: str = Form(...), name: str = Form(...), passwor
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    # Weryfikacja tokenu JWT z ciasteczka
-    user_email = get_current_user_from_cookie(request)
-    
+    # Sprawdzenie ciasteczka
+    user_email = request.cookies.get("user_email")
     if not user_email:
         return RedirectResponse(url="/")
     
@@ -179,14 +111,16 @@ async def dashboard(request: Request):
 
 @app.post("/claim")
 async def claim_device(request: Request, device_id: str = Form(...), aes_key: str = Form(...)):
-    user_email = get_current_user_from_cookie(request)
+    user_email = request.cookies.get("user_email")
     if not user_email: return RedirectResponse("/")
     
+    # Logika odsprzedaży / rejestracji
     aes_bytes = aes_key.encode('utf-8')
     if len(aes_bytes) != 16:
         return HTMLResponse("Klucz musi mieć 16 znaków! <a href='/dashboard'>Wróć</a>")
 
     database.register_or_claim_device(device_id, aes_bytes, user_email)
+    
     database.activate_device(device_id)
     
     return RedirectResponse(url="/dashboard", status_code=303)
@@ -199,7 +133,7 @@ async def update_config(
     ai_model: str = Form(...),
     system_prompt: str = Form(...)
 ):
-    user_email = get_current_user_from_cookie(request)
+    user_email = request.cookies.get("user_email")
     if not user_email: return RedirectResponse("/")
     
     # Zapisz w bazie
@@ -213,56 +147,20 @@ async def update_config(
     
     return RedirectResponse(url="/dashboard", status_code=303)
 
-# --- API REST (JWT Bearer Token) ---
-
-
-class UserRegister(BaseModel):
-    name: str
-    email: str
-    password: str
-
-@app.post("/api/register", status_code=201)
-async def api_register(user: UserRegister): # <--- Używamy modelu zamiast Form(...)
-    """Rejestracja nowego użytkownika przez API (JSON)"""
-    
-    # Teraz dostęp do danych jest przez kropkę: user.email, user.name
-    
-    # Sprawdź czy user istnieje
-    if database.get_user_by_email(user.email):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Utwórz użytkownika
-    success = database.create_user(user.email, user.name, user.password)
-    
-    if not success:
-        raise HTTPException(status_code=500, detail="Database error")
-    
-    return {"message": "User created successfully"}
-
-
-
+# --- API REST ---
 @app.post("/api/login")
 async def api_login(form_data: OAuth2PasswordRequestForm = Depends()):
-    """Logowanie dla zewnętrznych aplikacji / Swaggera"""
     user = database.get_user_by_email(form_data.username)
     if not user or not database.verify_password(form_data.password, user['password_hash']):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user['email']}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+        return {"error": "Invalid credentials"}
+    return {"access_token": form_data.username, "token_type": "bearer"}
 
 @app.get("/api/devices")
-async def api_get_devices(current_user_email: str = Depends(get_current_user_api)):
-    """Zwraca urządzenia. Wymaga nagłówka 'Authorization: Bearer <token>'"""
-    devices = database.get_user_devices(current_user_email)
+async def api_get_devices(token: str = Depends(oauth2_scheme)):
+    # Token to po prostu email
+    devices = database.get_user_devices(token)
     return [{"id": d['device_id'], "status": d['status']} for d in devices]
 
 if __name__ == "__main__":
+    # Uruchamiamy serwer na porcie 8001
     uvicorn.run("webapp:app", host="0.0.0.0", port=8001, reload=False)
