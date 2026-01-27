@@ -123,7 +123,6 @@ def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
 
 # --- DEVICE FUNCTIONS ---
-
 def register_or_claim_device(device_id, aes_key, user_email):
     with db_lock:
         conn = get_connection()
@@ -220,6 +219,21 @@ def get_device_auth(device_id):
         conn = get_connection()
         cur = conn.execute("SELECT aes_key, status FROM devices WHERE device_id = ?", (device_id,))
         return cur.fetchone()
+
+def update_device_status(device_id, status):
+    with db_lock:
+        conn = get_connection()
+        conn.execute("UPDATE devices SET status = ? WHERE device_id = ?", (status, device_id))
+        conn.commit()
+        conn.close()
+
+def get_all_pending_devices():
+    with db_lock:
+        conn = get_connection()
+        cur = conn.execute("SELECT device_id, aes_key FROM devices WHERE status = 'pending' ORDER BY created_at ASC")
+        devices = cur.fetchall()
+        conn.close()
+        return devices
 
 def log_event(device_id, type, message):
     with db_lock:

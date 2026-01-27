@@ -2,7 +2,7 @@ import jwt # PyJWT
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, Request, Form, Depends, Response, HTTPException, status
+from fastapi import FastAPI, Request, Form, Depends, Response, HTTPException, status, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -12,6 +12,7 @@ import database
 import backend_async
 import mqtt_service
 from pydantic import BaseModel
+import simulate_esp # <--- IMPORTUJEMY NASZ SYMULATOR
 
 # --- KONFIGURACJA ---
 app = FastAPI(title="ESPhera IoT Server")
@@ -214,8 +215,6 @@ async def update_config(
     return RedirectResponse(url="/dashboard", status_code=303)
 
 # --- API REST (JWT Bearer Token) ---
-
-
 class UserRegister(BaseModel):
     name: str
     email: str
@@ -257,6 +256,73 @@ async def api_login(form_data: OAuth2PasswordRequestForm = Depends()):
         data={"sub": user['email']}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+class DeviceRegister(BaseModel):
+    aes_key: str  # Klucz wysyłany przez aplikację mobilną (base64 lub hex)
+    name: str = "Nowa Kula" # Opcjonalna nazwa
+
+@app.post("/api/device/register", status_code=201)
+async def api_register_device(
+    device_data: DeviceRegister, 
+    background_tasks: BackgroundTasks, # <--- Wstrzykujemy obsługę zadań w tle
+    current_user_email: str = Depends(get_current_user_api)
+):
+    """
+    Krok 1 parowania: Mobile wysyła AES i tworzymy rekord 'pending'.
+    """
+    
+    # 1. Pobierz ID użytkownika na podstawie maila z tokena
+    user = database.get_user_by_email(current_user_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # 2. Zapisz urządzenie w bazie ze statusem "PENDING"
+    # Funkcja database.create_pending_device musi zostać dodana (opis niżej)
+    device_id = database.create_pending_device(
+        user_id=user['id'], 
+        aes_key=device_data.aes_key, 
+        name=device_data.name
+    )
+
+    background_tasks.add_task(
+        simulate_esp.run_esp_provisioning_task, 
+        device_id=str(device_id), 
+        aes_key=device_data.aes_key
+    )
+
+    
+    if not device_id:
+        raise HTTPException(status_code=500, detail="Could not create device record")
+
+    return {"message": "Device registered, waiting for verification", "device_id": device_id}
+
+
+@app.get("/api/device/{device_id}/status")
+async def api_check_device_status(
+    device_id: int, 
+    current_user_email: str = Depends(get_current_user_api)
+):
+    """
+    Krok 2 parowania (Polling): Mobile pyta czy status zmienił się na 'PAIRED'.
+    """
+    
+    # 1. Pobierz usera dla bezpieczeństwa (żeby nie sprawdzać cudzych urządzeń)
+    user = database.get_user_by_email(current_user_email)
+    
+    # 2. Pobierz urządzenie z bazy
+    device = database.get_device_by_id(device_id)
+    
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+        
+    # 3. Sprawdź czy urządzenie należy do tego użytkownika (Security)
+    if device['user_id'] != user['id']:
+        raise HTTPException(status_code=403, detail="Not authorized to view this device")
+
+    # 4. Zwróć status ("PENDING" lub "PAIRED")
+    return {"device_id": device_id, "status": device['status']}
+
 
 @app.get("/api/devices")
 async def api_get_devices(current_user_email: str = Depends(get_current_user_api)):

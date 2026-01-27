@@ -26,6 +26,66 @@ client = None # Globalna referencja
 
 # --- LOGIKA BIZNESOWA MQTT ---
 
+
+TOPIC_PROVISION = "devices/provisioning"
+
+def handle_provisioning(topic, payload_bytes):
+    """
+    Kula wysyła zaszyfrowany (TIME + 'ESPHERA')
+    Topic: devices/provisioning
+    """
+    try:
+        # Wyciągnij ID z tematu
+        print(f"[MQTT] Próba parowania (provisioning):")
+
+        # Sprawdzamy od najstarszego urządzenia, która ma status PENDING - czy odszyfrowanie wiadomości uda się kluczem tego urządzenia
+        pending_devices = database.get_all_pending_devices() 
+
+        device_id = None
+        for device in pending_devices:
+            aes_key = device['aes_key']
+            try:
+                decrypted_text = crypto_utils.decrypt_aes_ecb(payload_bytes, aes_key)
+                if "|ESPHERA" in decrypted_text:
+                    # sprawdzamy, czy urządzenie ma >5 minut
+                    cur_time = int(time.time())
+                    timestamp_str = decrypted_text.split('|')[0]
+                    if not timestamp_str.isdigit():
+                        print("[MQTT] Błąd weryfikacji: Nieprawidłowy timestamp")
+                        break
+                    timestamp = int(timestamp_str)
+                    if abs(cur_time - timestamp) > 300:
+                        print("[MQTT] Błąd weryfikacji: Timestamp poza dozwolonym zakresem")
+                        break
+                    device_id = device['device_id']
+                    print(f"[MQTT] Dopasowano urządzenie: {device_id}")
+                    break
+            except:
+                continue
+
+        # 4. SUKCES - Zmieniamy status na PAIRED
+        database.update_device_status(device_id, "PAIRED")
+        print(f"[MQTT] SUKCES! Urządzenie {device_id} sparowane.")
+        
+        # zwracamy wiadomość zwrotną (MQTT)
+        # topic: devices/provisioning/response
+        # header: hash(time + "ESPHERA")
+        # payload: hash(device_id)
+        response_topic = f"devices/provisioning/response"
+        timestamp = int(time.time())
+        header = crypto_utils.hash_sha256(f"{timestamp}|ESPHERA")
+        payload = crypto_utils.hash_sha256(device_id)
+        response_msg = {
+            "header": header,
+            "payload": payload
+        }
+        client.publish(response_topic, json.dumps(response_msg))
+
+
+
+    except Exception as e:
+        print(f"[MQTT] Provisioning Error: {e}")
+
 def handle_registration(payload):
     """Obsługa rejestracji nowej kuli przez Admina (Appkę)"""
     try:
@@ -146,20 +206,27 @@ def on_connect(c, userdata, flags, rc):
         c.subscribe(TOPIC_REGISTER)
         c.subscribe(TOPIC_REQUEST_START)
         c.subscribe(TOPIC_STATE)
+        c.subscribe(TOPIC_PROVISION) # <--- DODAJ TO
     else:
         print(f"[MQTT] Błąd połączenia: {rc}")
 
 def on_message(c, userdata, msg):
-    payload = msg.payload.decode('utf-8')
     topic = msg.topic
-    
-    # Routing wiadomości
-    if topic == TOPIC_REGISTER:
-        handle_registration(payload)
-    elif "request/start" in topic:
-        handle_request_start(topic, payload)
-    elif "/state" in topic:
-        handle_state_update(topic, payload)
+    # Dla provisioning payload może być binarny, dla reszty UTF-8 JSON
+    if "provisioning" in topic:
+        handle_provisioning(topic, msg.payload) # Przekazujemy bajty
+    else:
+        # Stara logika dla JSON
+        try:
+            payload = msg.payload.decode('utf-8')
+            if topic == TOPIC_REGISTER:
+                handle_registration(payload)
+            elif "request/start" in topic:
+                handle_request_start(topic, payload)
+            elif "/state" in topic:
+                handle_state_update(topic, payload)
+        except Exception as e:
+            print(f"[MQTT] Błąd dekodowania msg: {e}")
 
 
 
