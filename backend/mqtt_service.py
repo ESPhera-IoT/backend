@@ -71,7 +71,7 @@ def handle_provisioning(payload_bytes):
         # zwracamy wiadomość zwrotną (MQTT)
         # topic: devices/provisioning/response
         # header: hash(time + "ESPHERA")
-        # payload: hash(device_id)
+        # device_id: hash(device_id)
         response_topic = f"devices/provisioning/response"
         timestamp = int(time.time())
         header = crypto_utils.decrypt_chunk(f"{timestamp}|ESPHERA")

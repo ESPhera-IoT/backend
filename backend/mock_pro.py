@@ -6,7 +6,7 @@ import crypto_utils
 import threading
 import random
 
-MY_DEVICE_ID = "esp_nowy"
+MY_DEVICE_ID = "1"
 MY_AES_KEY = b'1234567890123456'
 BROKER_IP = "127.0.0.1"
 INPUT_FILE = "pytanie.wav"

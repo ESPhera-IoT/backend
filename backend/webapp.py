@@ -180,7 +180,7 @@ async def dashboard(request: Request):
     })
 
 @app.post("/claim")
-async def claim_device(request: Request, device_id: str = Form(...), aes_key: str = Form(...)):
+async def claim_device(request: Request, device_name: str = Form(...), aes_key: str = Form(...)):
     user_email = get_current_user_from_cookie(request)
     if not user_email: return RedirectResponse("/")
     
@@ -188,7 +188,7 @@ async def claim_device(request: Request, device_id: str = Form(...), aes_key: st
     if len(aes_bytes) != 16:
         return HTMLResponse("Klucz musi mieć 16 znaków! <a href='/dashboard'>Wróć</a>")
 
-    database.register_or_claim_device(device_id, aes_bytes, user_email)
+    device_id = database.register_or_claim_device(device_name, aes_bytes, user_email)
     database.activate_device(device_id)
     
     return RedirectResponse(url="/dashboard", status_code=303)

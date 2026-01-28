@@ -55,7 +55,8 @@ def init_db():
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS devices (
-                device_id TEXT PRIMARY KEY,
+                device_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_name TEXT DEFAULT 'Esphera Pro',
                 user_id INTEGER,
                 aes_key BLOB,
                 status TEXT CHECK(status IN ('pending', 'paired')) DEFAULT 'pending',
@@ -68,7 +69,7 @@ def init_db():
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS config (
-                device_id TEXT PRIMARY KEY,
+                device_id INTEGER PRIMARY KEY,
                 sound_model_id TEXT DEFAULT 'g8ZOdhoD9R6eYKPTjKbE',
                 led_intensity INTEGER DEFAULT 50,
                 sleep_timeout INTEGER DEFAULT 60,
@@ -81,7 +82,7 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                device_id TEXT,
+                device_id INTEGER,
                 type TEXT CHECK(type IN ('IN', 'OUT', 'SYS')),
                 message TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -121,7 +122,7 @@ def verify_password(plain, hashed):
     return pwd_context.verify(plain, hashed)
 
 # --- DEVICE FUNCTIONS ---
-def register_or_claim_device(device_id, aes_key, user_email):
+def register_or_claim_device(device_name, aes_key, user_email, previous_device_id=None):
     with db_lock:
         conn = get_connection()
         try:
@@ -130,20 +131,50 @@ def register_or_claim_device(device_id, aes_key, user_email):
             if not user: return False
             user_id = user['id']
 
-            cur = conn.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,))
-            existing = cur.fetchone()
 
-            if existing:
-                conn.execute("UPDATE devices SET user_id = ?, aes_key = ?, status = 'pending' WHERE device_id = ?", 
-                             (user_id, aes_key, device_id))
-                conn.execute("INSERT INTO logs (device_id, type, message) VALUES (?, ?, ?)", 
-                             (device_id, "SYS", f"Zmiana właściciela na {user_email}"))
+            # TUTAJ CHYBA INACZEJ CHCEMY TAK MI SIE WYDAJE ALE JAK CO TO ODKOMENTUJY
+            # INNY PLAN:
+            # ZROBIĆ NOWĄ KULĘ I PRZEPISAĆ CONFIG + LOGS DO NOWEJ KULI
+            # cur = conn.execute("SELECT * FROM devices WHERE device_name = ?", (device_name,))
+            # existing = cur.fetchone()
+            # if existing:
+            #     conn.execute("UPDATE devices SET user_id = ?, aes_key = ?, status = 'pending' WHERE device_name = ?", 
+            #                  (user_id, aes_key, device_name))
+            #     conn.execute("INSERT INTO logs (device_id, type, message) VALUES (?, ?, ?)", 
+            #                  (device_id, "SYS", f"Zmiana właściciela na {user_email}"))
+
+
+            # NEW APPROACH
+            if previous_device_id:
+                cur = conn.execute("SELECT * FROM devices WHERE device_id = ?", (previous_device_id,))
+                existing = cur.fetchone()
+                if existing:
+                    # Check if the previous device owner = current user
+                    if(existing['user_id'] != user_id):
+                        print("[DB] Claim error: Próba przejęcia urządzenia innego użytkownika.")
+                        return False
+                    conn.execute("UPDATE devices SET user_id = ?, aes_key = ?, status = 'pending' WHERE device_id = ?", 
+                                 (user_id, aes_key, previous_device_id))
+                    conn.execute("INSERT INTO logs (device_id, type, message) VALUES (?, ?, ?)", 
+                                 (previous_device_id, "SYS", f"Zmiana właściciela na {user_email}"))
+                    conn.commit()
+                    return True
+                
+                cursor = conn.execute("INSERT INTO devices (device_name, user_id, aes_key, status) VALUES (?, ?, ?, 'pending')", 
+                             (device_name, user_id, aes_key))
+                device_id = cursor.lastrowid
+                # UPDATE THE CONFIG OF THE PREVIOUS DEVICE TO THE NEW DEVICE ID
+                conn.execute("UPDATE config SET device_id = ? WHERE device_id = ?", (device_id, previous_device_id))
+                # UPDATE THE LOGS OF THE PREVIOUS DEVICE TO THE NEW DEVICE ID
+                conn.execute("UPDATE logs SET device_id = ? WHERE device_id = ?", (device_id, previous_device_id))
+            # NEW APPROACH ENDS HERE
             else:
-                conn.execute("INSERT INTO devices (device_id, user_id, aes_key, status) VALUES (?, ?, ?, 'pending')", 
-                             (device_id, user_id, aes_key))
+                cursor = conn.execute("INSERT INTO devices (device_name, user_id, aes_key, status) VALUES (?, ?, ?, 'pending')", 
+                             (device_name, user_id, aes_key))
+                device_id = cursor.lastrowid
                 conn.execute("INSERT INTO config (device_id) VALUES (?)", (device_id,))
             conn.commit()
-            return True
+            return device_id
         except Exception as e:
             print(f"[DB] Claim error: {e}")
             return False
@@ -181,7 +212,7 @@ def get_full_device_info(device_id):
         conn = get_connection()
         try:
             cur = conn.execute('''
-                SELECT d.aes_key, c.sound_model_id, c.led_intensity, c.sleep_timeout, c.system_prompt 
+                SELECT d.aes_key, d.device_name, c.sound_model_id, c.led_intensity, c.sleep_timeout, c.system_prompt 
                 FROM devices d 
                 JOIN config c ON d.device_id = c.device_id 
                 WHERE d.device_id = ?
