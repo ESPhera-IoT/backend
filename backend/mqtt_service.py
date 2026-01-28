@@ -27,7 +27,7 @@ client = None # Globalna referencja
 # --- LOGIKA BIZNESOWA MQTT ---
 
 TOPIC_PROVISION = "devices/provisioning"
-def handle_provisioning(header_bytes, payload_bytes):
+def handle_provisioning(payload_bytes):
     """
     Kula wysyła header z (TIME + 'ESPHERA')
     Topic: devices/provisioning
@@ -43,7 +43,7 @@ def handle_provisioning(header_bytes, payload_bytes):
         for device in pending_devices:
             aes_key = device['aes_key']
             try:
-                decrypted_text = crypto_utils.decrypt_aes_ecb(header_bytes, aes_key)
+                decrypted_text = crypto_utils.decrypt_aes_ecb(payload_bytes, aes_key)
                 if "|ESPHERA" in decrypted_text:
                     # sprawdzamy, czy urządzenie ma >5 minut
                     cur_time = int(time.time())
@@ -61,8 +61,11 @@ def handle_provisioning(header_bytes, payload_bytes):
             except:
                 continue
 
+        if not device_id:
+            print("[MQTT] Parowanie nieudane: Nieznane urządzenie lub błąd weryfikacji")
+            return
         # 4. SUKCES - Zmieniamy status na PAIRED
-        database.update_device_status(device_id, "PAIRED")
+        database.activate_device(device_id)
         print(f"[MQTT] SUKCES! Urządzenie {device_id} sparowane.")
         
         # zwracamy wiadomość zwrotną (MQTT)
@@ -80,7 +83,6 @@ def handle_provisioning(header_bytes, payload_bytes):
         client.publish(response_topic, json.dumps(response_msg))
     except Exception as e:
         print(f"[MQTT] Provisioning Error: {e}")
-
 
 
 def handle_registration(payload):
@@ -196,7 +198,6 @@ def handle_state_update(topic, payload):
 
         
 # --- CALLBACKI PAHO ---
-
 def on_connect(c, userdata, flags, rc):
     if rc == 0:
         print(f"[MQTT] Połączono z brokerem. Subskrybuję...")
@@ -211,7 +212,7 @@ def on_message(c, userdata, msg):
     topic = msg.topic
     # Dla provisioning payload może być binarny, dla reszty UTF-8 JSON
     if "provisioning" in topic:
-        handle_provisioning(msg.header, msg.payload) # Przekazujemy bajty
+        handle_provisioning(msg.payload) # Przekazujemy bajty
     else:
         # Stara logika dla JSON
         try:
