@@ -19,3 +19,7 @@ backend/*db-wal
 backend/*db-shm
 backend/pytanie.wav
 backend/finalna_odpowiedz.wav
+
+.envrc
+.venv
+.direnv
