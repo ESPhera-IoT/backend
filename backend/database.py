@@ -244,6 +244,14 @@ def get_all_pending_devices():
         devices = cur.fetchall()
         conn.close()
         return devices
+    
+def get_device_logs(device_id, limit=100):
+    with db_lock:
+        conn = get_connection()
+        cur = conn.execute("SELECT * FROM logs WHERE device_id = ? ORDER BY timestamp DESC LIMIT ?", (device_id, limit))
+        logs = cur.fetchall()
+        conn.close()
+        return logs
 
 def log_event(device_id, type, message):
     with db_lock:

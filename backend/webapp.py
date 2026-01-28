@@ -355,6 +355,27 @@ async def api_get_device_config(
     config = database.get_device_config(device_id)
     return config
 
+@app.get("/api/devices/{device_id}/logs", status_code=200)
+async def api_get_device_logs(
+    device_id: str,
+    current_user_email: str = Depends(get_current_user_api)
+):
+    """Zwraca konfigurację urządzenia w formacie JSON"""
+    # Weryfikacja użytkownika i własności urządzenia
+    user = database.get_user_by_email(current_user_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    device = database.get_device_by_id(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    if str(device['user_id']) != str(user['id']):
+        raise HTTPException(status_code=403, detail="Not authorized to view this device")
+
+    logs = database.get_device_logs(device_id)
+    return logs
+
 
 @app.post("/api/devices", status_code=200)
 async def api_devices(

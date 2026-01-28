@@ -42,11 +42,11 @@ async def process_audio(input_path, output_path, device_id):
     dev_conf = await asyncio.to_thread(database.get_full_device_info, device_id)
     
     ai_model = "gpt-4.1-nano"
-    sys_prompt = "Jesteś pomocnym asystentem."
+    sys_prompt = "Jesteś pomocnym asystentem. Odpowiadaj zwięźle - w maksymalnie dwóch zdaniach."
     
     if dev_conf:
-        ai_model = dev_conf['ai_model']
-        sys_prompt = dev_conf['system_prompt']
+        sys_prompt = dev_conf['system_prompt'] + "\nOdpowiadaj zwięźle - w maksymalnie dwóch zdaniach."
+        sound_model_id = dev_conf['sound_model_id']
     
     print(f" [AI] Config: Model={ai_model}, Prompt='{sys_prompt[:20]}...'")
 
@@ -78,17 +78,11 @@ async def process_audio(input_path, output_path, device_id):
         # 3. TTS
         temp_mp3 = output_path.replace(".wav", ".mp3")
         
-        # TTS WITH ELEVEN LABS
         audio_iterator = await asyncio.to_thread(
             eleven_labs_client.text_to_speech.convert,
             text=response_text,
-            voice_id="g8ZOdhoD9R6eYKPTjKbE",
+            voice_id=sound_model_id,
             model_id="eleven_multilingual_v2", # Note: double check if 'eleven_v3' is released/supported in your SDK
-            voice_settings=VoiceSettings(
-                stability=0.5,
-                similarity_boost=0.8,
-                speed=1.2
-            )
         )
 
         with open(temp_mp3, "wb") as f:
