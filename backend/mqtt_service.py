@@ -75,10 +75,10 @@ def handle_provisioning(payload_bytes):
         response_topic = f"devices/provisioning/response"
         timestamp = int(time.time())
         header = crypto_utils.decrypt_chunk(f"{timestamp}|ESPHERA")
-        payload = crypto_utils.decrypt_chunk(device_id)
+        device_id_crypt = crypto_utils.decrypt_chunk(device_id)
         response_msg = {
             "header": header,
-            "payload": payload
+            "device_id": device_id_crypt
         }
         client.publish(response_topic, json.dumps(response_msg))
     except Exception as e:
