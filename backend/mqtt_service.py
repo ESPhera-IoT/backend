@@ -43,7 +43,7 @@ def handle_provisioning(payload_bytes):
         for device in pending_devices:
             aes_key = device['aes_key']
             try:
-                decrypted_text = crypto_utils.decrypt_aes_ecb(payload_bytes, aes_key)
+                decrypted_text = crypto_utils.encrypt_chunk(payload_bytes, aes_key)
                 if "|ESPHERA" in decrypted_text:
                     # sprawdzamy, czy urządzenie ma >5 minut
                     cur_time = int(time.time())
@@ -74,8 +74,8 @@ def handle_provisioning(payload_bytes):
         # payload: hash(device_id)
         response_topic = f"devices/provisioning/response"
         timestamp = int(time.time())
-        header = crypto_utils.hash_sha256(f"{timestamp}|ESPHERA")
-        payload = crypto_utils.hash_sha256(device_id)
+        header = crypto_utils.decrypt_chunk(f"{timestamp}|ESPHERA")
+        payload = crypto_utils.decrypt_chunk(device_id)
         response_msg = {
             "header": header,
             "payload": payload
