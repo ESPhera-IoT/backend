@@ -181,11 +181,13 @@ def register_or_claim_device(device_name, aes_key, user_email, previous_device_i
         finally:
             conn.close()
 
-def update_device_config(device_id, led_intensity, sound_model_id, sleep_timeout, system_prompt):
+def update_device_config(device_id, device_name, led_intensity, sound_model_id, sleep_timeout, system_prompt):
     """Zapisuje nową konfigurację (LED + AI)"""
     with db_lock:
         conn = get_connection()
         try:
+            conn.execute("UPDATE devices SET device_name = ? WHERE device_id = ?", (device_name, device_id))
+
             conn.execute('''
                 UPDATE config 
                 SET led_intensity = ?, sound_model_id = ?, sleep_timeout = ?, system_prompt = ? 

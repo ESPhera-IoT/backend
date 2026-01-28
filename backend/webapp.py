@@ -197,6 +197,7 @@ async def claim_device(request: Request, device_name: str = Form(...), aes_key: 
 async def update_config(
     request: Request, 
     device_id: str = Form(...), 
+    device_name: str = Form(...),
     led_intensity: int = Form(...),
     sound_model_id: str = Form(...),
     sleep_timeout: int = Form(...),
@@ -206,7 +207,7 @@ async def update_config(
     if not user_email: return RedirectResponse("/")
     
     # Zapisz w bazie
-    database.update_device_config(device_id, led_intensity, sound_model_id, sleep_timeout, system_prompt)
+    database.update_device_config(device_id, device_name, led_intensity, sound_model_id, sleep_timeout, system_prompt)
     
     # MQTT Live Update
     if mqtt_service.client:
