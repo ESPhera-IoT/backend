@@ -407,10 +407,10 @@ async def api_register_device(
     
     # 2. Zapisz urządzenie w bazie ze statusem "PENDING"
     # Funkcja database.create_pending_device musi zostać dodana (opis niżej)
-    device_id = database.create_pending_device(
+    device_id = database.register_pending_device(
         user_id=user['id'], 
+        device_name=device_data.name,
         aes_key=device_data.aes_key, 
-        name=device_data.name
     )
 
 

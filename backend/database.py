@@ -238,6 +238,19 @@ def get_user_devices(user_email):
         finally:
             conn.close()
 
+def register_pending_device(user_id, device_name, aes_key):
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.execute("INSERT INTO devices (user_id, device_name, aes_key, status) VALUES (?, ?, ?, 'pending')", 
+                         (user_id, device_name, aes_key))
+            device_id = cursor.lastrowid
+            conn.execute("INSERT INTO config (device_id) VALUES (?)", (device_id,))
+            conn.commit()
+            return device_id
+        finally:
+            conn.close()
+
 def activate_device(device_id):
     with db_lock:
         conn = get_connection()

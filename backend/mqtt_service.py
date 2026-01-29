@@ -29,12 +29,15 @@ client = None # Globalna referencja
 TOPIC_PROVISION = "devices/provisioning"
 def handle_provisioning(payload_bytes):
     """
-    Kula wysyła header z (TIME + 'ESPHERA')
+    Kula wysyła header z ("ESPHERA|" + (8 bajtów czas)timestamp) -> int64 bajotowo
     Topic: devices/provisioning
     """
     try:
         # Wyciągnij ID z tematu
         print(f"[MQTT] Próba parowania (provisioning):")
+
+        # Wypisz payload
+        print(f"[MQTT] Payload (bytes): {payload_bytes}")
 
         # Sprawdzamy od najstarszego urządzenia, która ma status PENDING - czy odszyfrowanie wiadomości uda się kluczem tego urządzenia
         pending_devices = database.get_all_pending_devices() 
@@ -42,9 +45,10 @@ def handle_provisioning(payload_bytes):
         device_id = None
         for device in pending_devices:
             aes_key = device['aes_key']
+
             try:
                 decrypted_text = crypto_utils.encrypt_chunk(payload_bytes, aes_key)
-                if "|ESPHERA" in decrypted_text:
+                if "ESPHERA|" in decrypted_text:
                     # sprawdzamy, czy urządzenie ma >5 minut
                     cur_time = int(time.time())
                     timestamp_str = decrypted_text.split('|')[0]
@@ -100,7 +104,7 @@ def handle_registration(payload):
         aes_key_bytes = aes_key_str.encode('utf-8')
         
         # Używamy nowej metody z database.py (PRO)
-        if database.register_device_pending(device_id, aes_key_bytes, user_email):
+        if database.register_pending_device(device_id, aes_key_bytes, user_email):
              # Od razu aktywujemy dla testów (w produkcji byłaby weryfikacja)
             database.activate_device(device_id)
             print(f"[MQTT] Zarejestrowano i aktywowano: {device_id}")
