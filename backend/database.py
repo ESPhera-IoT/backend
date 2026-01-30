@@ -70,7 +70,7 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS config (
                 device_id INTEGER PRIMARY KEY,
-                sound_model_id TEXT DEFAULT 'g8ZOdhoD9R6eYKPTjKbE',
+                sound_model_id TEXT DEFAULT 'nPczCjzI2devNBz1zQrb',
                 led_intensity INTEGER DEFAULT 50,
                 sleep_timeout INTEGER DEFAULT 60,
                 system_prompt TEXT DEFAULT 'Jesteś pomocnym asystentem głosowym.',
@@ -273,13 +273,20 @@ def get_device_by_id(device_id):
 def get_device_config(device_id):
     with db_lock:
         conn = get_connection()
-        cur = conn.execute("SELECT * FROM config WHERE device_id = ?", (device_id,))
+        cur = conn.execute("SELECT d.device_name, c.* FROM config c JOIN devices d ON c.device_id = d.device_id WHERE c.device_id = ?", (device_id,))
         return cur.fetchone()
 
 def update_device_status(device_id, status):
     with db_lock:
         conn = get_connection()
         conn.execute("UPDATE devices SET status = ? WHERE device_id = ?", (status, device_id))
+        conn.commit()
+        conn.close()
+
+def update_device_aes_key_and_status(device_id, aes_key):
+    with db_lock:
+        conn = get_connection()
+        conn.execute("UPDATE devices SET aes_key = ?, status = 'pending' WHERE device_id = ?", (aes_key, device_id))
         conn.commit()
         conn.close()
 

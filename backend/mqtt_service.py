@@ -18,15 +18,19 @@ MY_LOCAL_IP = os.getenv("LOCAL_IP")
 TCP_PORT = 26358             # Port TCP
 
 # Tematy (Topics)
-TOPIC_REGISTER = "/esphera/admin/register"
-TOPIC_REQUEST_START = "devices/+/request/start" # Wildcard + oznacza dowolne ID
-TOPIC_STATE = "devices/+/state"
-
+# TOPIC_REGISTER = "/esphera/admin/register"
+# TOPIC_REQUEST_START = "devices/+/request/start" # Wildcard + oznacza dowolne ID
+# TOPIC_STATE = "devices/+/state"
 client = None # Globalna referencja
 
-# --- LOGIKA BIZNESOWA MQTT ---
+# Provisioning
+TOPIC_PROVISIONING = "devices/provisioning"
+TOPIC_PROVISIONING_RESPONSE = "devices/provisioning/response"
+# Config
+TOPIC_DEVICE_ASK_CONFIG = "devices/+/ask_config"
+TOPIC_DEVICE_CONFIG = "devices/{device_id}/config"
 
-TOPIC_PROVISION = "devices/provisioning"
+# --- LOGIKA BIZNESOWA MQTT ---
 def handle_provisioning(payload_bytes):
     """
     Kula wysyła header z ("ESPHERA|" + (8 bajtów czas)timestamp) -> int64 bajotowo
@@ -73,7 +77,7 @@ def handle_provisioning(payload_bytes):
         # header: hash(time + "ESPHERA")
         # device_id: hash(device_id)
 
-        response_topic = f"devices/provisioning/response"
+        response_topic = TOPIC_PROVISIONING_RESPONSE
         payload = b"ESPHERA|" + int(time.time()).to_bytes(8, byteorder='little') + int(device_id).to_bytes(8, byteorder='little')
         crypted_payload = crypto_utils.prepare_payload(payload, aes_key)
 
@@ -84,152 +88,60 @@ def handle_provisioning(payload_bytes):
         print(f"[MQTT] Provisioning Error: {e}")
 
 
-def handle_registration(payload):
-    """Obsługa rejestracji nowej kuli przez Admina (Appkę)"""
-    try:
-        data = json.loads(payload)
-        device_id = data.get("device_id")
-        aes_key_str = data.get("aes_key")
-        user_email = data.get("user_email", "admin@localhost") # Appka powinna to wysłać
+def handle_config_request(payload_bytes, device_id):
+    device = database.get_device_auth(device_id)
+    aes_key = device['aes_key']
+    if not device:
+        print(f"[MQTT] Błąd: Nieznane urządzenie {device_id} w żądaniu konfiguracji.")
+        return
+    
+    # check header
+    if not crypto_utils.check_header(payload_bytes, aes_key):
+        print(f"[MQTT] Błąd: Nieprawidłowy header w żądaniu konfiguracji od urządzenia {device_id}.")
+        return
 
-        if not device_id or len(aes_key_str) != 16:
-            print("[MQTT] Błąd rejestracji: Nieprawidłowe dane")
-            return
+    print(f"[MQTT] Żądanie konfiguracji od urządzenia {device_id}")
+    send_config_update(device_id, aes_key)
 
-        aes_key_bytes = aes_key_str.encode('utf-8')
-        
-        # Używamy nowej metody z database.py (PRO)
-        if database.register_pending_device(device_id, aes_key_bytes, user_email):
-             # Od razu aktywujemy dla testów (w produkcji byłaby weryfikacja)
-            database.activate_device(device_id)
-            print(f"[MQTT] Zarejestrowano i aktywowano: {device_id}")
-        else:
-            print(f"[MQTT] Nie udało się zarejestrować {device_id} (może brak usera?)")
+def send_config_update(device_id, aes_key):
+    config = database.get_device_config(device_id)
+    led_intensity = config['led_intensity']
+    sleep_timeout = config['sleep_timeout']
 
-    except Exception as e:
-        print(f"[MQTT] Register error: {e}")
+    response_topic = TOPIC_DEVICE_CONFIG.format(device_id=device_id)
+    payload = b"ESPHERA|" + int(time.time()).to_bytes(8, byteorder='little') + int(led_intensity).to_bytes(4, byteorder='little') + int(sleep_timeout).to_bytes(4, byteorder='little')
+    crypted_payload = crypto_utils.prepare_payload(payload, aes_key)
 
-def handle_request_start(topic, payload):
-    """
-    Kula pyta: "Mogę nadać audio?"
-    Topic: devices/{device_id}/request/start
-    Payload: { "encrypted_time": "..." }
-    """
-    try:
-        # Wyciągamy device_id z tematu
-        # devices/esp1234/request/start -> split('/') -> [1]
-        parts = topic.split('/')
-        if len(parts) < 3: return
-        device_id = parts[1]
-
-        print(f"[MQTT] Żądanie startu od: {device_id}")
-
-        # 1. Sprawdź czy znamy urządzenie
-        device = database.get_device_auth(device_id)
-        if not device:
-            print(f"[MQTT] Odrzucono: Nieznane urządzenie {device_id}")
-            return
-        
-        if device['status'] != 'paired':
-             print(f"[MQTT] Odrzucono: Urządzenie nie jest sparowane (status={device['status']})")
-             return
-
-        aes_key = device['aes_key']
-        
-        try:
-            req_data = json.loads(payload)
-        except:
-            print("[MQTT] Błąd JSON w request/start")
-            return
-        
-        # 3. Generujemy sesję
-        session_token = session_manager.create_session(device_id, session_type='upload')
-
-        # 4. Wysyłamy odpowiedź
-        # Topic: devices/{device_id}/response/setup
-        response_topic = f"devices/{device_id}/response/setup"
-        response_payload = {
-            "ip": MY_LOCAL_IP,
-            "port": TCP_PORT,
-            "session_token": session_token
-        }
-        
-        client.publish(response_topic, json.dumps(response_payload))
-        print(f"[MQTT] Wysłano zgodę do {device_id}. Token: {session_token[:6]}...")
-        
-        # Logujemy w bazie
-        database.log_event(device_id, "SYS", "Rozpoczęto sesję audio (Upload)")
-        database.update_last_seen(device_id)
-
-    except Exception as e:
-        print(f"[MQTT] Request Start Error: {e}")
-
-def notify_response_ready(device_id, ip, port, session_token, size):
-    """
-    Wysyła powiadomienie MQTT: devices/{device_id}/response/ready
-    """
-    topic = f"devices/{device_id}/response/ready"
-    payload = {
-        "session_token": session_token,
-        "host": ip,
-        "port": port,
-        "size": size
-    }
-    try:
-        client.publish(topic, json.dumps(payload))
-        print(f"[MQTT] Wysłano POWIADOMIENIE o odpowiedzi do {device_id} (Size: {size})")
-    except Exception as e:
-        print(f"[MQTT] Błąd wysyłania notyfikacji: {e}")
-
-def handle_state_update(topic, payload):
-    try:
-        # Topic: devices/{id}/state
-        device_id = topic.split('/')[1]
-        data = json.loads(payload)
-
-        if 'rssi' in data:
-            rssi = int(data['rssi'])
-            print(f"[MQTT] WiFi RSSI od {device_id}: {rssi} dBm")
-            database.update_device_rssi(device_id, rssi)
-
-    except Exception as e:
-        print(f"[MQTT] Błąd state update: {e}")
-
+    client.publish(response_topic, crypted_payload)
         
 # --- CALLBACKI PAHO ---
 def on_connect(c, userdata, flags, rc):
     if rc == 0:
         print(f"[MQTT] Połączono z brokerem. Subskrybuję...")
-        c.subscribe(TOPIC_REGISTER)
-        c.subscribe(TOPIC_REQUEST_START)
-        c.subscribe(TOPIC_STATE)
-        c.subscribe(TOPIC_PROVISION) # <--- DODAJ TO
+        # c.subscribe(TOPIC_REGISTER)
+        # c.subscribe(TOPIC_REQUEST_START)
+        # c.subscribe(TOPIC_STATE)
+        c.subscribe(TOPIC_PROVISIONING) 
+        c.subscribe(TOPIC_DEVICE_ASK_CONFIG)
     else:
         print(f"[MQTT] Błąd połączenia: {rc}")
 
 def on_message(c, userdata, msg):
     topic = msg.topic
-    # Dla provisioning payload może być binarny, dla reszty UTF-8 JSON
-    if "provisioning" in topic:
-        handle_provisioning(msg.payload) # Przekazujemy bajty
-    else:
-        # Stara logika dla JSON
-        try:
-            payload = msg.payload.decode('utf-8')
-            if topic == TOPIC_REGISTER:
-                handle_registration(payload)
-            elif "request/start" in topic:
-                handle_request_start(topic, payload)
-            elif "/state" in topic:
-                handle_state_update(topic, payload)
-        except Exception as e:
-            print(f"[MQTT] Błąd dekodowania msg: {e}")
-
-
-
+    try:
+        if topic == TOPIC_PROVISIONING:
+            handle_provisioning(msg.payload) # Przekazujemy bajty
+            return
+        elif topic.startswith("devices/") and topic.endswith("/ask_config"):
+            device_id = int(topic.split('/')[1])
+            handle_config_request(msg.payload, device_id)
+            return
+    except Exception as e:
+        print(f"[MQTT] Błąd w obsłudze provisioning: {e}")
+        return
+        
 
 # --- START ---
-
 async def start_mqtt():
     global client
     client = mqtt.Client()
