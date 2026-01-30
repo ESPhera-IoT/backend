@@ -4,12 +4,6 @@ from cryptography.hazmat.backends import default_backend
 import os
 import time
 
-# Klucz i Payload
-base64_key = "AT2gqijyAmKGfIKvnEx7oBeN/rS4hLPNHpNBeDECPbE="
-
-# Zwróć uwagę, że skopiowałem Twój payload dokładnie
-payload = b'o \xbb\xbe\xa5\xee\xcd\x1b\xf3:\x0f`w\xfd\xb8\x1b\xe8e\xbd,\xb6\x04\xee<\xea\xd20\x07h\xef{\xf0f\xb7\xd1M\xd9\x13S\x83g\xf6]\xc7'
-# payload = b'zE\xa2!\xe6]\xb9\xfcF\x9a\xadE;\x9cvs^\x1a\xd6^\x86\xff\x18B\x95\xdc\xbe\xba\x84iY\x1f^[\x8a}\xee\rd\xa6?i\xa5\xc2\x03)3\xce_\xeb\x0fg\xc5'
 
 def decrypt_debug(encrypted_data, base64_key):
     IV_SIZE = 12
@@ -34,15 +28,7 @@ def decrypt_debug(encrypted_data, base64_key):
     try:
         # Sam proces deszyfrowania (zwraca bajty)
         decrypted_bytes = decryptor.update(ciphertext) + decryptor.finalize()
-        
         print("\n=== SUKCES KRYPTOGRAFICZNY ===")
-        # print(f"Odszyfrowane bajty (HEX): {decrypted_bytes.hex()}")
-        # print(f"Odszyfrowane bajty (RAW): {decrypted_bytes}")
-        
-        # Próba bezpiecznego wyświetlenia jako tekst (zastąpi błędy znakami )
-        # print(f"Jako tekst (utf-8 replace): {decrypted_bytes.decode('utf-8', errors='replace')}")
-        
-        # Analiza struktury (zakładamy "ESPHERA|" + timestamp)
         # "ESPHERA|" to 8 znaków. Sprawdźmy co jest po nich.
         print(len(decrypted_bytes))
         if len(decrypted_bytes) > 8:
@@ -72,7 +58,7 @@ def check_header(encrypted_data, base64_key):
     time_check = bool(curr_time - mess_time < 300)
     return time_check
         
-check_header(payload, base64_key)
+
 
 def prepare_payload(data_bytes, base64_key: str) -> bytes:
     """
@@ -106,6 +92,14 @@ def prepare_payload(data_bytes, base64_key: str) -> bytes:
     print(payload)
     return payload
 
-data_bytes = b"ESPHERA|" + (int(time.time())).to_bytes(8, byteorder='little') + b"|" + (int(42).to_bytes(8, byteorder='little'))
 
-prepare_payload(data_bytes, base64_key)
+# # TESTS
+
+# # Klucz i Payload
+# base64_key = "AT2gqijyAmKGfIKvnEx7oBeN/rS4hLPNHpNBeDECPbE="
+# # Zwróć uwagę, że skopiowałem Twój payload dokładnie
+# payload = b'o \xbb\xbe\xa5\xee\xcd\x1b\xf3:\x0f`w\xfd\xb8\x1b\xe8e\xbd,\xb6\x04\xee<\xea\xd20\x07h\xef{\xf0f\xb7\xd1M\xd9\x13S\x83g\xf6]\xc7'
+# # payload = b'zE\xa2!\xe6]\xb9\xfcF\x9a\xadE;\x9cvs^\x1a\xd6^\x86\xff\x18B\x95\xdc\xbe\xba\x84iY\x1f^[\x8a}\xee\rd\xa6?i\xa5\xc2\x03)3\xce_\xeb\x0fg\xc5'
+# data_bytes = b"ESPHERA|" + (int(time.time())).to_bytes(8, byteorder='little') + b"|" + (int(42).to_bytes(8, byteorder='little'))
+# check_header(payload, base64_key)
+# prepare_payload(data_bytes, base64_key)
