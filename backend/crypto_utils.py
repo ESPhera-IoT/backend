@@ -6,16 +6,17 @@ import time
 
 # Klucz i Payload
 base64_key = "AT2gqijyAmKGfIKvnEx7oBeN/rS4hLPNHpNBeDECPbE="
-aes_key = base64.b64decode(base64_key)
 
 # Zwróć uwagę, że skopiowałem Twój payload dokładnie
 payload = b'o \xbb\xbe\xa5\xee\xcd\x1b\xf3:\x0f`w\xfd\xb8\x1b\xe8e\xbd,\xb6\x04\xee<\xea\xd20\x07h\xef{\xf0f\xb7\xd1M\xd9\x13S\x83g\xf6]\xc7'
 # payload = b'zE\xa2!\xe6]\xb9\xfcF\x9a\xadE;\x9cvs^\x1a\xd6^\x86\xff\x18B\x95\xdc\xbe\xba\x84iY\x1f^[\x8a}\xee\rd\xa6?i\xa5\xc2\x03)3\xce_\xeb\x0fg\xc5'
 
-def decrypt_debug(encrypted_data, key):
+def decrypt_debug(encrypted_data, base64_key):
     IV_SIZE = 12
     TAG_SIZE = 16
     
+    key = base64.b64decode(base64_key)
+
     if len(encrypted_data) < IV_SIZE + TAG_SIZE:
         print("Dane za krótkie.")
         return
@@ -56,11 +57,9 @@ def decrypt_debug(encrypted_data, key):
         print(f"BŁĄD: {e}")
 
 
-def check_header(encrypted_data, key):
-    prefix, mess_time = decrypt_debug(encrypted_data, key)
+def check_header(encrypted_data, base64_key):
+    prefix, mess_time = decrypt_debug(encrypted_data, base64_key)
     # check prefix
-    # print("prefix: " + prefix)
-    # print("time: " + time)
     if (prefix != b'ESPHERA|'):
         print("brak prefiksu ESPHERA|")
         return False
@@ -70,10 +69,10 @@ def check_header(encrypted_data, key):
     print(mess_time)
     print(curr_time)
 
-    time_check = curr_time - mess_time < 300
+    time_check = bool(curr_time - mess_time < 300)
     return time_check
         
-check_header(payload, aes_key)
+check_header(payload, base64_key)
 
 def prepare_payload(data_bytes, base64_key: str) -> bytes:
     """

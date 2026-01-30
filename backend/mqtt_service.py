@@ -42,28 +42,42 @@ def handle_provisioning(payload_bytes):
         # Sprawdzamy od najstarszego urządzenia, która ma status PENDING - czy odszyfrowanie wiadomości uda się kluczem tego urządzenia
         pending_devices = database.get_all_pending_devices() 
 
-        device_id = None
-        for device in pending_devices:
-            aes_key = device['aes_key']
+        # console log how many pending devices we have:
+        print(f"[MQTT] Liczba oczekujących urządzeń: {len(pending_devices)}")
 
+        device_id = None
+        aes_key = None
+        for device in pending_devices:
+            print(f"[MQTT] Checking device {device['device_id']}")
+            aes_key = device['aes_key']
             try:
-                decrypted_text = crypto_utils.encrypt_chunk(payload_bytes, aes_key)
-                if "ESPHERA|" in decrypted_text:
-                    # sprawdzamy, czy urządzenie ma >5 minut
-                    cur_time = int(time.time())
-                    timestamp_str = decrypted_text.split('|')[0]
-                    if not timestamp_str.isdigit():
-                        print("[MQTT] Błąd weryfikacji: Nieprawidłowy timestamp")
-                        continue
-                    timestamp = int(timestamp_str)
-                    if abs(cur_time - timestamp) > 300:
-                        print("[MQTT] Błąd weryfikacji: Timestamp poza dozwolonym zakresem")
-                        continue
+                print(f"[MQTT] Próba odszyfrowania kluczem urządzenia {device['device_id']}")
+                if crypto_utils.check_header(payload_bytes, aes_key):
+                    print(f"udało się dla {device['device_id']}")
                     device_id = device['device_id']
-                    print(f"[MQTT] Dopasowano urządzenie: {device_id}")
                     break
-            except:
+                print(f"nie udało się dla {device['device_id']}")
+            except Exception as e:
+                print(f"[MQTT] Błąd podczas weryfikacji urządzenia {device['device_id']}: {e}")
                 continue
+            # try:
+            #     decrypted_text = crypto_utils.check_header(payload_bytes, aes_key)
+            #     if "ESPHERA|" in decrypted_text:
+            #         # sprawdzamy, czy urządzenie ma >5 minut
+            #         cur_time = int(time.time())
+            #         timestamp_str = decrypted_text.split('|')[0]
+            #         if not timestamp_str.isdigit():
+            #             print("[MQTT] Błąd weryfikacji: Nieprawidłowy timestamp")
+            #             continue
+            #         timestamp = int(timestamp_str)
+            #         if abs(cur_time - timestamp) > 300:
+            #             print("[MQTT] Błąd weryfikacji: Timestamp poza dozwolonym zakresem")
+            #             continue
+            #         device_id = device['device_id']
+            #         print(f"[MQTT] Dopasowano urządzenie: {device_id}")
+            #         break
+            # except:
+            #     continue
 
         if not device_id:
             print("[MQTT] Parowanie nieudane: Nieznane urządzenie lub błąd weryfikacji")
@@ -76,15 +90,22 @@ def handle_provisioning(payload_bytes):
         # topic: devices/provisioning/response
         # header: hash(time + "ESPHERA")
         # device_id: hash(device_id)
+
         response_topic = f"devices/provisioning/response"
-        timestamp = int(time.time())
-        header = crypto_utils.decrypt_chunk(f"{timestamp}|ESPHERA")
-        device_id_crypt = crypto_utils.decrypt_chunk(device_id)
-        response_msg = {
-            "header": header,
-            "device_id": device_id_crypt
-        }
-        client.publish(response_topic, json.dumps(response_msg))
+        payload = b"ESPHERA|" + int(time.time()).to_bytes(8, byteorder='little') + int(device_id).to_bytes(8, byteorder='little')
+        crypted_payload = crypto_utils.prepare_payload(payload, aes_key)
+
+        client.publish(response_topic, crypted_payload)
+
+        # response_topic = f"devices/provisioning/response"
+        # timestamp = int(time.time())
+        # header = crypto_utils.decrypt_chunk(f"{timestamp}|ESPHERA")
+        # device_id_crypt = crypto_utils.decrypt_chunk(device_id)
+        # response_msg = {
+        #     "header": header,
+        #     "device_id": device_id_crypt
+        # }
+        # client.publish(response_topic, json.dumps(response_msg))
     except Exception as e:
         print(f"[MQTT] Provisioning Error: {e}")
 
