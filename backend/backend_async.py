@@ -118,10 +118,11 @@ async def handle_client(reader, writer):
         # --- KROK 2: ODBIÓR AUTORYZACJI ---
         # Czytamy ustalony rozmiar zaszyfrowanego nagłówka
 
-        ENCRYPTED_AUTH_SIZE = 12 # IV 
-        + 16 # ESPHERA| (8) + timestamp (8)
-        + 16 # TAG
-
+        ENCRYPTED_AUTH_SIZE = (
+              12 # IV 
+            + 16 # ESPHERA| (8) + timestamp (8)
+            + 16 # TAG
+        )
         encrypted_auth = await reader.readexactly(ENCRYPTED_AUTH_SIZE)
 
         device = database.get_device_by_id(device_id)
