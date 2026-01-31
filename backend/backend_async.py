@@ -19,14 +19,10 @@ load_dotenv()
 # --- KONFIGURACJA ---
 HOST = '0.0.0.0'
 PORT = 26358
-ESP_SAMPLE_RATE = 44100  # Częstotliwość próbkowania mikrofonu ESP32
 INPUT_DIR = "recordings"
 OUTPUT_DIR = "responses"
 MY_LOCAL_IP = os.getenv("LOCAL_IP")
-SEND_CHUNK_SIZE = 900
-
-# --- KONFIGURACJA SZYFROWANIA (MUSI PASOWAĆ DO ESP32) ---
-
+SEND_CHUNK_SIZE = 2048
 
 os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -41,8 +37,8 @@ async def save_pcm_to_wav(pcm_data, filename):
     """Zapisuje surowe bajty (PCM) do pliku WAV z nagłówkiem"""
     with wave.open(filename, 'wb') as wav_file:
         wav_file.setnchannels(1)        # Mono
-        wav_file.setsampwidth(2)        # 16-bit (2 bajty na próbkę)
-        wav_file.setframerate(ESP_SAMPLE_RATE)
+        wav_file.setsampwidth(3)        # 24-bit (3 bajty na próbkę)
+        wav_file.setframerate(16000)
         wav_file.writeframes(pcm_data)
     print(f" [FILE] Zapisano plik audio: {filename}")
 
@@ -62,18 +58,14 @@ async def send_audio_response(writer, file_path, aes_key):
     print(f" [TCP-OUT] Rozpoczynam wysyłanie odpowiedzi: {file_path}")
     
     try:
-        # 1. Wysyłamy bajt sygnałowy (Start Streaming)
         writer.write(b'\x01')
         await writer.drain()
 
         # Otwieramy plik WAV i czytamy surowe ramki (bez nagłówka pliku WAV)
         with wave.open(file_path, 'rb') as wf:
-            # Upewnij się, że format jest taki, jakiego oczekuje ESP (PCM 16-bit)
-            # Tutaj zakładamy, że plik wyjściowy jest zgodny.
-            
             while True:
                 # Czytamy kawałek czystego audio
-                data_chunk = wf.readframes(SEND_CHUNK_SIZE // 2) # dzielone przez 2 bo 16-bit to 2 bajty
+                data_chunk = wf.readframes(SEND_CHUNK_SIZE // 3) # dzielone przez 3 bo 24-bit to 3 bajty
                 
                 if not data_chunk:
                     break # Koniec pliku
@@ -147,7 +139,6 @@ async def handle_client(reader, writer):
                 print(" [TCP] Połączenie zamknięte przez klienta.")
                 break
 
-            # OBSŁUGA "FINAL BYTE" Z C++
             # Jeśli ESP wyśle 1 bajt (0x00) jako znacznik końca:
             if len(size_bytes) == 1 and size_bytes == b'\x00':
                 print(" [TCP] Odebrano znacznik końca transmisji.")
