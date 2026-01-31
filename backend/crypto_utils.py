@@ -5,7 +5,7 @@ import os
 import time
 
 
-def decrypt_debug(encrypted_data, base64_key):
+def decrypt_debug(encrypted_data, base64_key: str):
     IV_SIZE = 12
     TAG_SIZE = 16
     
@@ -13,7 +13,7 @@ def decrypt_debug(encrypted_data, base64_key):
 
     if len(encrypted_data) < IV_SIZE + TAG_SIZE:
         print("Dane za krótkie.")
-        return
+        return None, None
 
     iv = encrypted_data[:IV_SIZE]
     tag = encrypted_data[-TAG_SIZE:]
@@ -35,7 +35,6 @@ def decrypt_debug(encrypted_data, base64_key):
             prefix = decrypted_bytes[:8]
             time = decrypted_bytes[8:17]
             print(f"\nPrefiks: {prefix}")
-            # print(f"Reszta (timestamp binary?): {TIME.hex()}")
             print(f"Reszta (jako liczba int?): {int.from_bytes(time, byteorder='little')}") # lub 'big'
             return prefix, int.from_bytes(time, byteorder='little') 
 
@@ -43,7 +42,7 @@ def decrypt_debug(encrypted_data, base64_key):
         print(f"BŁĄD: {e}")
 
 
-def check_header(encrypted_data, base64_key):
+def check_header(encrypted_data, base64_key: str) -> bool:
     prefix, mess_time = decrypt_debug(encrypted_data, base64_key)
     # check prefix
     if (prefix != b'ESPHERA|'):
@@ -92,6 +91,58 @@ def prepare_payload(data_bytes, base64_key: str) -> bytes:
     print(payload)
     return payload
 
+
+def decrypt_audio_chunk(encrypted_chunk, base64_key: str) -> bytes:
+    IV_SIZE = 12
+    TAG_SIZE = 16
+    
+    key = base64.b64decode(base64_key)
+
+    if len(encrypted_chunk) < IV_SIZE + TAG_SIZE:
+        print("Dane za krótkie.")
+        return b""
+    
+    try:
+        iv = encrypted_chunk[:IV_SIZE]
+        tag = encrypted_chunk[-TAG_SIZE:]
+        ciphertext = encrypted_chunk[IV_SIZE:-TAG_SIZE]
+
+        decryptor = Cipher(
+            algorithms.AES(key),
+            modes.GCM(iv, tag),
+            backend=default_backend()
+        ).decryptor()
+
+        decrypted_bytes = decryptor.update(ciphertext) + decryptor.finalize()
+        return decrypted_bytes
+
+    except Exception as e:
+        print(f"BŁĄD podczas deszyfrowania chunku audio: {e}")
+        return b""
+
+
+def encrypt_audio_chunk(data: bytes, base64_key: str) -> bytes:
+    """
+    Szyfruje dane do formatu: [IV (12)] + [Ciphertext] + [Tag (16)]
+    """
+    # 1. Generujemy losowe IV (Nonce) - 12 bajtów
+    key = base64.b64decode(base64_key)
+
+    iv = os.urandom(12)
+
+    # 2. Szyfrowanie GCM
+    encryptor = Cipher(
+        algorithms.AES(key),
+        modes.GCM(iv),
+        backend=default_backend()
+    ).encryptor()
+
+    ciphertext = encryptor.update(data) + encryptor.finalize()
+    
+    
+    # 3. Składamy paczkę: IV + Ciphertext + Tag
+    # tag ma zawsze 16 bajtów w GCM
+    return iv + ciphertext + encryptor.tag
 
 # # TESTS
 

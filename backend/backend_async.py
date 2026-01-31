@@ -1,240 +1,213 @@
 import asyncio
-import base64
+import struct
 import os
-import time
-import shutil
+import wave
 from dotenv import load_dotenv
-from pydub import AudioSegment
 from openai import AsyncOpenAI
 import crypto_utils
+from elevenlabs import ElevenLabs
+import response_generator
+
+# --- TWOJE IMPORTY ---
+# (Zakładam, że te pliki istnieją w Twoim projekcie)
 import database
 import mqtt_service
-import session_manager
-from elevenlabs import ElevenLabs, VoiceSettings
-
+import time
 
 load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
-client = AsyncOpenAI(api_key=api_key) if api_key else None
-
-ELEVEN_LABS_API_KEY = os.getenv("ELEVEN_LABS_API_KEY")
-eleven_labs_client = ElevenLabs(api_key=ELEVEN_LABS_API_KEY)
-
 
 # --- KONFIGURACJA ---
 HOST = '0.0.0.0'
 PORT = 26358
-ESP_SAMPLE_RATE = 44100
+ESP_SAMPLE_RATE = 44100  # Częstotliwość próbkowania mikrofonu ESP32
 INPUT_DIR = "recordings"
 OUTPUT_DIR = "responses"
 MY_LOCAL_IP = os.getenv("LOCAL_IP")
+SEND_CHUNK_SIZE = 900
+
+# --- KONFIGURACJA SZYFROWANIA (MUSI PASOWAĆ DO ESP32) ---
+
 
 os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Klienty AI
+api_key = os.getenv("OPENAI_API_KEY")
+client = AsyncOpenAI(api_key=api_key) if api_key else None
+eleven_labs_client = ElevenLabs(api_key=os.getenv("ELEVEN_LABS_API_KEY"))
 
-async def process_audio(input_path, output_path, device_id):
-    """Logika AI (lub Symulacja)"""
-    print(f" [AI] Przetwarzanie dla {device_id}...")
-    
-    # 1. Pobierz konfigurację z bazy (Model + Osobowość)
-    # Musimy to zrobić w wątku (sqlite lock)
-    dev_conf = await asyncio.to_thread(database.get_full_device_info, device_id)
-    
-    ai_model = "gpt-4.1-nano"
-    sys_prompt = "Jesteś pomocnym asystentem. Odpowiadaj zwięźle - w maksymalnie dwóch zdaniach."
-    
-    if dev_conf:
-        sys_prompt = dev_conf['system_prompt'] + "\nOdpowiadaj zwięźle - w maksymalnie dwóch zdaniach."
-        sound_model_id = dev_conf['sound_model_id']
-    
-    print(f" [AI] Config: Model={ai_model}, Prompt='{sys_prompt[:20]}...'")
 
+async def save_pcm_to_wav(pcm_data, filename):
+    """Zapisuje surowe bajty (PCM) do pliku WAV z nagłówkiem"""
+    with wave.open(filename, 'wb') as wav_file:
+        wav_file.setnchannels(1)        # Mono
+        wav_file.setsampwidth(2)        # 16-bit (2 bajty na próbkę)
+        wav_file.setframerate(ESP_SAMPLE_RATE)
+        wav_file.writeframes(pcm_data)
+    print(f" [FILE] Zapisano plik audio: {filename}")
+
+
+
+async def send_audio_response(writer, file_path, aes_key):
+    """
+    Wysyła plik WAV z powrotem do ESP przez otwarty socket.
+    Format: 
+    1. Bajt sygnałowy (0x01)
+    2. Pętle: [Rozmiar (4b)] + [Zaszyfrowana paczka]
+    """
+    if not os.path.exists(file_path):
+        print(f" [ERR] Plik odpowiedzi nie istnieje: {file_path}")
+        return
+
+    print(f" [TCP-OUT] Rozpoczynam wysyłanie odpowiedzi: {file_path}")
+    
     try:
-        # 1. Transkrypcja
-        with open(input_path, "rb") as audio_file:
-            transcript = await client.audio.transcriptions.create(
-                model="whisper-1", 
-                file=audio_file, 
-                language="pl"
-            )
-        user_text = transcript.text
-        print(f" [AI] Tekst: '{user_text}'")
-        await asyncio.to_thread(database.log_event, device_id, "IN", user_text)
+        # 1. Wysyłamy bajt sygnałowy (Start Streaming)
+        writer.write(b'\x01')
+        await writer.drain()
 
-        # 2. GPT (z dynamicznymi parametrami z bazy)
-        print(" [AI] Generowanie odpowiedzi...")
-        completion = await client.chat.completions.create(
-            model=ai_model,
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": user_text}
-            ]
-        )
-        response_text = completion.choices[0].message.content
-        print(f" [AI] Odpowiedź: '{response_text}'")
-        await asyncio.to_thread(database.log_event, device_id, "OUT", response_text)
+        # Otwieramy plik WAV i czytamy surowe ramki (bez nagłówka pliku WAV)
+        with wave.open(file_path, 'rb') as wf:
+            # Upewnij się, że format jest taki, jakiego oczekuje ESP (PCM 16-bit)
+            # Tutaj zakładamy, że plik wyjściowy jest zgodny.
+            
+            while True:
+                # Czytamy kawałek czystego audio
+                data_chunk = wf.readframes(SEND_CHUNK_SIZE // 2) # dzielone przez 2 bo 16-bit to 2 bajty
+                
+                if not data_chunk:
+                    break # Koniec pliku
 
-        # 3. TTS
-        temp_mp3 = output_path.replace(".wav", ".mp3")
-        
-        audio_iterator = await asyncio.to_thread(
-            eleven_labs_client.text_to_speech.convert,
-            text=response_text,
-            voice_id=sound_model_id,
-            model_id="eleven_multilingual_v2", # Note: double check if 'eleven_v3' is released/supported in your SDK
-        )
+                # Szyfrujemy (IV + Cipher + Tag)
+                encrypted_packet = crypto_utils.encrypt_audio_chunk(data_chunk, aes_key)
+                
+                # Obliczamy rozmiar zaszyfrowanej paczki
+                packet_size = len(encrypted_packet)
+                
+                # Wysyłamy rozmiar (4 bajty, Little Endian)
+                writer.write(struct.pack('<I', packet_size))
+                
+                # Wysyłamy zaszyfrowane dane
+                writer.write(encrypted_packet)
+                
+                # Opcjonalnie: flush co jakiś czas, ale asyncio robi to nieźle samo
+                await writer.drain()
 
-        with open(temp_mp3, "wb") as f:
-            for chunk in audio_iterator:
-                f.write(chunk)
-
-        def convert():
-            sound = AudioSegment.from_mp3(temp_mp3)
-            sound = sound.set_frame_rate(ESP_SAMPLE_RATE).set_channels(1).set_sample_width(2)
-            sound.export(output_path, format="wav")
-            if os.path.exists(temp_mp3):
-                os.remove(temp_mp3)
-
-        await asyncio.to_thread(convert)
-        return True
-    
-
-        # TTS WITH OPENAI
-        response = await client.audio.speech.create(
-            model="tts-1", 
-            voice="alloy", 
-            input=response_text
-        )
-        await asyncio.to_thread(response.stream_to_file, temp_mp3)
-
-        # Konwersja do WAV z odpowiednimi parametrami dla ESP
-        def convert():
-            sound = AudioSegment.from_mp3(temp_mp3)
-            sound = sound.set_frame_rate(ESP_SAMPLE_RATE).set_channels(1).set_sample_width(2)
-            sound.export(output_path, format="wav")
-            os.remove(temp_mp3)
-        
-        await asyncio.to_thread(convert)
-        return True
+        # Koniec transmisji - wysyłamy rozmiar 0
+        zero_size = 0
+        writer.write(struct.pack('<I', zero_size))
+        await writer.drain()
+        print(" [TCP-OUT] Zakończono wysyłanie audio.")
 
     except Exception as e:
-        print(f" [ERR] AI Error: {e}")
-        return False
+        print(f" [TCP-OUT ERR] Błąd wysyłania: {e}")
+
 
 async def handle_client(reader, writer):
-    """Główna obsługa połączenia TCP (Upload i Download)"""
     addr = writer.get_extra_info('peername')
+    print(f" [TCP] Nowe połączenie od: {addr}")
     
     try:
-        # 1. CZYTAMY TOKEN
-        try:
-            line = await asyncio.wait_for(reader.readline(), timeout=5.0)
-        except asyncio.TimeoutError:
+        # --- KROK 1: ODBIÓR DEVICE ID ---
+        # Czytamy dokładnie 8 bajtów (uint64_t)
+        device_id_bytes = await reader.readexactly(8)
+        # Rozpakowujemy: < = little-endian (ESP32), Q = unsigned long long (8 bytes)
+        device_id = struct.unpack('<Q', device_id_bytes)[0]
+        print(f" [TCP] Device ID: {device_id}")
+
+        # --- KROK 2: ODBIÓR AUTORYZACJI ---
+        # Czytamy ustalony rozmiar zaszyfrowanego nagłówka
+
+        ENCRYPTED_AUTH_SIZE = 12 # IV 
+        + 16 # ESPHERA| (8) + timestamp (8)
+        + 16 # TAG
+
+        encrypted_auth = await reader.readexactly(ENCRYPTED_AUTH_SIZE)
+
+        device = database.get_device_by_id(device_id)
+        if not device:
+            print(f" [TCP] Błąd: Nieznane urządzenie {device_id}.")
             return
+        aes_key = device['aes_key']
+        print(f" [TCP] Sprawdzamy autoryzację dla {device_id}...")
+        if not crypto_utils.check_header(encrypted_auth, aes_key):
+            print(f" [TCP] Błąd: Nieudana autoryzacja dla {device_id}.")
+            return 
         
-        if not line: return
-        session_token = line.decode().strip()
+        # --- KROK 3: PĘTLA ODBIORU AUDIO ---
+        full_audio_buffer = bytearray()
         
-        # 2. WERYFIKACJA SESJI
-        session = session_manager.ACTIVE_SESSIONS.get(session_token)
-        
-        if not session:
-            print(f" [TCP] Błąd: Nieznany token {session_token[:8]}...")
-            return
-
-        device_id = session['device_id']
-        session_type = session['type']
-        
-        # Pobieramy klucz AES
-        device_auth = await asyncio.to_thread(database.get_device_auth, device_id)
-        if not device_auth: return
-        aes_key = device_auth['aes_key']
-
-        print(f" [TCP] Połączenie {session_type.upper()} od {device_id}")
-
-        # --- SCENARIUSZ 1: UPLOAD (Kula mówi) ---
-        if session_type == 'upload':
-            timestamp = int(time.time())
-            decrypted_input = os.path.join(INPUT_DIR, f"rec_{device_id}_{timestamp}.wav")
-            output_wav = os.path.join(OUTPUT_DIR, f"resp_{timestamp}.wav")
-
-            # Odbieranie
-            encrypted_data = b""
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(reader.read(4096), timeout=5.0)
-                    if not chunk: break
-                    encrypted_data += chunk
-                except asyncio.TimeoutError:
-                    break
+        while True:
+            # Czytamy 4 bajty - rozmiar następnej paczki (size_t)
+            # Używamy read(), a nie readexactly(), żeby obsłużyć koniec strumienia
+            size_bytes = await reader.read(4)
             
-            # Deszyfracja
-            if len(encrypted_data) > 0:
-                audio_data = crypto_utils.decrypt_chunk(encrypted_data, aes_key)
-                with open(decrypted_input, 'wb') as f:
-                    f.write(audio_data)
-                print(f" [TCP] Odebrano audio ({len(audio_data)} B)")
-                
-                # Uruchamiamy AI w tle
-                asyncio.create_task(
-                    run_ai_pipeline(decrypted_input, output_wav, device_id)
-                )
-            else:
-                print(" [TCP] Puste dane.")
+            if not size_bytes:
+                print(" [TCP] Połączenie zamknięte przez klienta.")
+                break
 
-        # --- SCENARIUSZ 2: DOWNLOAD (Kula słucha) ---
-        elif session_type == 'download':
-            # Pobieramy ścieżkę do pliku, który mamy wysłać
-            file_to_send = session.get('file_path')
+            # OBSŁUGA "FINAL BYTE" Z C++
+            # Jeśli ESP wyśle 1 bajt (0x00) jako znacznik końca:
+            if len(size_bytes) == 1 and size_bytes == b'\x00':
+                print(" [TCP] Odebrano znacznik końca transmisji.")
+                break
             
-            if file_to_send and os.path.exists(file_to_send):
-                print(f" [TCP] Wysyłanie pliku: {file_to_send}")
-                with open(file_to_send, 'rb') as f:
-                    clear_audio = f.read()
-                
-                # Szyfrujemy
-                encrypted_response = crypto_utils.encrypt_chunk(clear_audio, aes_key)
-                
-                # Wysyłamy
-                writer.write(encrypted_response)
-                await writer.drain()
-                print(f" [TCP] Wysłano {len(encrypted_response)} zaszyfrowanych bajtów.")
-            else:
-                print(" [TCP] Błąd: Brak pliku do wysłania!")
+            # Jeśli otrzymaliśmy mniej niż 4 bajty i to nie jest zero, to błąd transmisji
+            if len(size_bytes) < 4:
+                print(f" [ERR] Niekompletny nagłówek rozmiaru: {len(size_bytes)} bajtów.")
+                break
 
+            # Konwertujemy bajty na int (wielkość paczki danych)
+            chunk_size = struct.unpack('<I', size_bytes)[0]
+            
+            # Zabezpieczenie przed pustymi paczkami
+            if chunk_size == 0:
+                continue
+
+            # Czytamy DOKŁADNIE tyle danych, ile zapowiedział nagłówek
+            encrypted_chunk = await reader.readexactly(chunk_size)
+            
+            # Odszyfrowujemy i dodajemy do bufora
+            decrypted_chunk = crypto_utils.decrypt_audio_chunk(encrypted_chunk, aes_key)
+            full_audio_buffer.extend(decrypted_chunk)
+
+        # --- KONIEC TRANSMISJI ---
+        if len(full_audio_buffer) == 0:
+            print(" [TCP] Brak odebranego audio.")
+            return  
+
+        timestamp = int(time.time())
+        filename = os.path.join(INPUT_DIR, f"{device_id}_{timestamp}.wav")
+        output_filename = os.path.join(OUTPUT_DIR, f"{device_id}_{timestamp}_response.wav")
+        
+        # Zapisz surowe dane jako WAV
+        await save_pcm_to_wav(full_audio_buffer, filename)
+        
+        # Uruchom logikę AI
+        success = await asyncio.create_task(response_generator.process_audio(filename, output_filename, device_id))
+
+        if success:
+            # 3. Wysyłanie odpowiedzi zwrotnej do ESP
+            await send_audio_response(writer, output_filename, aes_key)
+        else:
+            print(" [AI] Błąd generowania odpowiedzi.")
+       
+    except asyncio.IncompleteReadError:
+        print(" [ERR] Przerwano połączenie w trakcie czytania danych.")
     except Exception as e:
-        print(f" [TCP] Error: {e}")
+        print(f" [ERR] Błąd obsługi klienta: {e}")
     finally:
         writer.close()
         await writer.wait_closed()
-        session_manager.remove_session(session_token)
 
-async def run_ai_pipeline(input_path, output_path, device_id):
-    """Po udanym AI, tworzymy sesję DOWNLOAD i wołamy MQTT"""
-    success = await process_audio(input_path, output_path, device_id)
-    
-    if success:
-        # 1. Tworzymy sesję na pobieranie
-        dl_token = session_manager.create_session(device_id, session_type='download')
-        
-        # dopisujemy ścieżkę pliku do sesji, żeby handler wiedział co wysłać
-        session_manager.ACTIVE_SESSIONS[dl_token]['file_path'] = output_path
-        
-        file_size = os.path.getsize(output_path) # Rozmiar czystego pliku
-        
-        # 2. Wysyłamy MQTT
-        mqtt_service.notify_response_ready(device_id, MY_LOCAL_IP, PORT, dl_token, file_size)
-    else:
-        print(" [AI] Niepowodzenie - brak odpowiedzi.")
 
 async def main():
     server = await asyncio.start_server(handle_client, HOST, PORT)
     print(f"=== BACKEND READY ({MY_LOCAL_IP}:{PORT}) ===")
-    await asyncio.gather(
-        server.serve_forever(),
-        mqtt_service.start_mqtt()
-    )
+    print(f"=== OCZEKIWANIE NA ESP32... ===")
+    
+    async with server:
+        await server.serve_forever()
 
 if __name__ == "__main__":
     try:
