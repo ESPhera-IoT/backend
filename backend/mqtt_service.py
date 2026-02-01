@@ -96,20 +96,27 @@ def handle_config_request(payload_bytes, device_id):
         return
     
     # check header
-    if not crypto_utils.check_header(payload_bytes, aes_key):
+    header_ok, ota_updated = crypto_utils.check_header_ota(payload_bytes, aes_key)
+
+    if not header_ok:
         print(f"[MQTT] Błąd: Nieprawidłowy header w żądaniu konfiguracji od urządzenia {device_id}.")
         return
+    
+    if ota_updated:
+        database.set_ota_update_true(device_id)
 
     print(f"[MQTT] Żądanie konfiguracji od urządzenia {device_id}")
+
     send_config_update(device_id, aes_key)
 
 def send_config_update(device_id, aes_key):
     config = database.get_device_config(device_id)
     led_intensity = config['led_intensity']
     sleep_timeout = config['sleep_timeout']
+    ota_updated = config['updated_ota']
 
     response_topic = TOPIC_DEVICE_CONFIG.format(device_id=device_id)
-    payload = b"ESPHERA|" + int(time.time()).to_bytes(8, byteorder='little') + int(led_intensity).to_bytes(4, byteorder='little') + int(sleep_timeout).to_bytes(4, byteorder='little')
+    payload = b"ESPHERA|" + int(time.time()).to_bytes(8, byteorder='little') + int(led_intensity).to_bytes(4, byteorder='little') + int(sleep_timeout).to_bytes(4, byteorder='little') + (b'\x01' if ota_updated else b'\x00')
     crypted_payload = crypto_utils.prepare_payload(payload, aes_key)
 
     client.publish(response_topic, crypted_payload)

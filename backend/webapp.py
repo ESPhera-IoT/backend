@@ -1,9 +1,13 @@
+from glob import glob
+import hashlib
+import os
+import shutil
 import jwt # PyJWT
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Request, Form, Depends, Response, HTTPException, status, BackgroundTasks
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi import FastAPI, File, Request, Form, Depends, Response, HTTPException, status, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import uvicorn
@@ -242,6 +246,90 @@ async def api_register(user: UserRegister): # <--- Używamy modelu zamiast Form(
     
     return {"message": "User created successfully"}
 
+
+
+OTA_UPLOAD_DIR = "ota_files"
+@app.post("/api/upload-ota", status_code=200)
+async def api_upload_ota(
+    ota_file: UploadFile = File(...),
+    current_user_email: str = Depends(get_current_user_api)
+):
+    """Endpoint do przesyłania plików OTA przez API (multipart/form-data)"""
+    
+    # Weryfikacja użytkownika i własności urządzenia
+    user = database.get_user_by_email(current_user_email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",")
+    if str(user['id']) not in ADMIN_IDS:
+        raise HTTPException(status_code=403, detail="Not authorized to upload OTA files")
+    
+    # ZAPISZ OTA PLIK
+    os.makedirs(OTA_UPLOAD_DIR, exist_ok=True)
+    filename = ota_file.filename
+    filename = os.path.basename(filename)
+    file_location = os.path.join(OTA_UPLOAD_DIR, filename)
+
+    try:
+        with open(file_location, "wb") as buffer:
+            # shutil.copyfileobj jest wydajny i zapisuje strumień do pliku
+            shutil.copyfileobj(ota_file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not save file: {e}")
+    finally:
+        # Ważne: zamykamy uchwyt pliku z uploadu
+        ota_file.file.close()
+
+    database.set_ota_updated_false_all_devices()
+
+    return {"message": "OTA file uploaded successfully"}
+
+def calculate_md5(file_path):
+    """Pomocnicza funkcja do liczenia MD5 pliku"""
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
+
+@app.get("/api/latest-ota")
+async def get_latest_ota():
+    """
+    Endpoint dla ESP: Pobiera najnowszy dostępny plik firmware.
+    Zwraca plik oraz nagłówek 'x-MD5' do weryfikacji.
+    """
+    # 1. Sprawdź czy katalog istnieje
+    if not os.path.exists(OTA_UPLOAD_DIR):
+         raise HTTPException(status_code=404, detail="No OTA files available")
+
+    # 2. Znajdź wszystkie pliki w katalogu
+    # Używamy pełnych ścieżek
+    list_of_files = glob.glob(os.path.join(OTA_UPLOAD_DIR, "*"))
+    
+    # Filtrujemy, żeby brać pod uwagę tylko pliki (nie katalogi)
+    list_of_files = [f for f in list_of_files if os.path.isfile(f)]
+
+    if not list_of_files:
+        raise HTTPException(status_code=404, detail="No firmware found")
+
+    # 3. Znajdź najnowszy plik na podstawie czasu modyfikacji (getmtime)
+    latest_file = max(list_of_files, key=os.path.getmtime)
+    filename = os.path.basename(latest_file)
+
+    # 4. Oblicz MD5 (ESP tego potrzebuje do weryfikacji poprawności pobierania)
+    md5_checksum = calculate_md5(latest_file)
+
+    # 5. Zwróć plik z odpowiednimi nagłówkami
+    return FileResponse(
+        path=latest_file,
+        filename=filename,
+        media_type='application/octet-stream',
+        headers={
+            "x-MD5": md5_checksum,             # Standard często używany w bibliotekach ESP
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
 
 
 @app.post("/api/login")

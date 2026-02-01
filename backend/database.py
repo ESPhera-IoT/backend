@@ -75,6 +75,7 @@ def init_db():
                 sleep_timeout INTEGER DEFAULT 60,
                 system_prompt TEXT DEFAULT 'Jesteś pomocnym asystentem głosowym.',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_ota BOOLEAN DEFAULT 1,
                 FOREIGN KEY(device_id) REFERENCES devices(device_id) ON DELETE CASCADE
             )
         ''')
@@ -115,6 +116,25 @@ def get_user_by_email(email):
         try:
             cur = conn.execute("SELECT * FROM users WHERE email = ?", (email,))
             return cur.fetchone()
+        finally:
+            conn.close()
+
+
+def set_ota_updated_false_all_devices():
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.execute("UPDATE config SET updated_ota = 0")
+            conn.commit()
+        finally:
+            conn.close()
+
+def set_ota_update_true(device_id):
+    with db_lock:
+        conn = get_connection()
+        try:
+            conn.execute("UPDATE config SET updated_ota = 1 WHERE device_id = ?", (device_id,))
+            conn.commit()
         finally:
             conn.close()
 

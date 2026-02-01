@@ -33,17 +33,21 @@ def decrypt_debug(encrypted_data, base64_key: str):
         print(len(decrypted_bytes))
         if len(decrypted_bytes) > 8:
             prefix = decrypted_bytes[:8]
-            time = decrypted_bytes[8:17]
+            time = decrypted_bytes[8:16]
+            ota_updated = b'\x00'
+            if(len(decrypted_bytes) > 16):
+                ota_updated = decrypted_bytes[16]
+                print(f"Reszta (jako liczba int?): {int.from_bytes(ota_updated, byteorder='little')}")
             print(f"\nPrefiks: {prefix}")
-            print(f"Reszta (jako liczba int?): {int.from_bytes(time, byteorder='little')}") # lub 'big'
-            return prefix, int.from_bytes(time, byteorder='little') 
+            print(f"Reszta (jako liczba int?): {int.from_bytes(time, byteorder='little')}")
+            return prefix, int.from_bytes(time, byteorder='little'), bool.from_bytes(ota_updated, byteorder='little')
 
     except Exception as e:
         print(f"BŁĄD: {e}")
 
 
 def check_header(encrypted_data, base64_key: str) -> bool:
-    prefix, mess_time = decrypt_debug(encrypted_data, base64_key)
+    prefix, mess_time, _ = decrypt_debug(encrypted_data, base64_key)
     # check prefix
     if (prefix != b'ESPHERA|'):
         print("brak prefiksu ESPHERA|")
@@ -56,6 +60,21 @@ def check_header(encrypted_data, base64_key: str) -> bool:
 
     time_check = bool(curr_time - mess_time < 300)
     return time_check
+
+def check_header_ota(encrypted_data, base64_key: str) -> bool:
+    prefix, mess_time, ota_updated = decrypt_debug(encrypted_data, base64_key)
+    # check prefix
+    if (prefix != b'ESPHERA|'):
+        print("brak prefiksu ESPHERA|")
+        return False
+    # check if message time was sent at least 5 minutes ago
+    print("Spradzamy czas")
+    curr_time = int(time.time())
+    print(mess_time)
+    print(curr_time)
+
+    time_check = bool(curr_time - mess_time < 300)
+    return time_check, ota_updated
         
 
 
