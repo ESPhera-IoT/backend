@@ -396,7 +396,7 @@ async def api_register_device(
     # Funkcja database.create_pending_device musi zostać dodana (opis niżej)
     device_id = database.register_pending_device(
         user_id=user['id'], 
-        device_name=device_data.name,
+        device_name=device_data.device_name,
         aes_key=device_data.aes_key, 
     )
     return {"device_id": device_id, "message": "Device registered successfully"}
