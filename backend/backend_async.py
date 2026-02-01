@@ -22,7 +22,7 @@ PORT = 26358
 INPUT_DIR = "recordings"
 OUTPUT_DIR = "responses"
 MY_LOCAL_IP = os.getenv("LOCAL_IP")
-SEND_CHUNK_SIZE = 2048
+SEND_CHUNK_SIZE = 1000
 
 os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
