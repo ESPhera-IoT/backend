@@ -72,7 +72,7 @@ async def process_audio(input_path, output_path, device_id):
 
         def convert():
             sound = AudioSegment.from_mp3(temp_mp3)
-            sound = sound.set_frame_rate(16000).set_channels(1).set_sample_width(3)
+            sound = sound.set_frame_rate(16000).set_channels(1).set_sample_width(1)
             sound.export(output_path, format="wav")
             if os.path.exists(temp_mp3):
                 os.remove(temp_mp3)
