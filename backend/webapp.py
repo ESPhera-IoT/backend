@@ -1,5 +1,5 @@
 import jwt # PyJWT
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Request, Form, Depends, Response, HTTPException, status, BackgroundTasks
@@ -33,12 +33,14 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
 def create_access_token(data: dict, expires_delta: timedelta = None):
     """Tworzy token JWT z czasem wygasania"""
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(datetime.timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(datetime.timezone.utc) + timedelta(minutes=15)
     
-    # Dodajemy 'exp' (expiration) i 'sub' (subject/email)
+    # Używamy timezone.utc bezpośrednio, nie datetime.timezone.utc
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    
+    # Dodajemy 'exp' (expiration)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
