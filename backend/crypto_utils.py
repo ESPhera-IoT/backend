@@ -5,7 +5,6 @@ import os
 import time
 
 
-
 def decrypt_data(encrypted_data, base64_key: str) -> bytes:
     IV_SIZE = 12
     TAG_SIZE = 16
@@ -54,15 +53,19 @@ def decrypt_check_header(encrypted_data, base64_key: str) -> bool:
     decrypted = decrypt_data(encrypted_data, base64_key)
     return check_header(decrypted)
 
+
 def decrypt_return_log(encrypted_data, base64_key: str) -> bytes:
     decrypted = decrypt_data(encrypted_data, base64_key)
-    if(check_header(decrypted)):
+    if check_header(decrypted):
         # return rest of the message - but transform bites to string
-        print(decrypted[16:])
-        log = decrypted.decode('utf-8', errors='ignore')
+        binary_log = decrypted[16:]
+        print(binary_log)
+        log = binary_log.decode("utf-8", errors="ignore")
         print(log)
+        log = log.replace("[1970-01-01 00:00:00] ", "")
         return log
     return False
+
 
 def encrypt_data(data: bytes, base64_key: str) -> bytes:
     """
@@ -141,7 +144,7 @@ def check_header1(encrypted_data, base64_key: str) -> bool:
 
     time_check = bool(curr_time - mess_time < 300)
     return time_check
-    
+
 def return_log(encrypted_data, base64_key: str) -> bool:
     IV_SIZE = 12
     TAG_SIZE = 16
