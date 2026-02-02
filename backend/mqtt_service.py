@@ -26,6 +26,8 @@ client = None # Globalna referencja
 # Provisioning
 TOPIC_PROVISIONING = "devices/provisioning"
 TOPIC_PROVISIONING_RESPONSE = "devices/provisioning/response"
+TOPIC_LOG = "devices/+/logs"
+
 # Config
 TOPIC_DEVICE_ASK_CONFIG = "devices/+/ask_config"
 TOPIC_DEVICE_CONFIG = "devices/{device_id}/config"
@@ -56,7 +58,7 @@ def handle_provisioning(payload_bytes):
             aes_key = device['aes_key']
             try:
                 print(f"[MQTT] Próba odszyfrowania kluczem urządzenia {device['device_id']}")
-                if crypto_utils.check_header(payload_bytes, aes_key):
+                if crypto_utils.decrypt_check_header(payload_bytes, aes_key):
                     print(f"udało się dla {device['device_id']}")
                     device_id = device['device_id']
                     break
@@ -79,7 +81,7 @@ def handle_provisioning(payload_bytes):
 
         response_topic = TOPIC_PROVISIONING_RESPONSE
         payload = b"ESPHERA|" + int(time.time()).to_bytes(8, byteorder='little') + int(device_id).to_bytes(8, byteorder='little')
-        crypted_payload = crypto_utils.prepare_payload(payload, aes_key)
+        crypted_payload = crypto_utils.encrypt_data(payload, aes_key)
 
         client.publish(response_topic, crypted_payload)
 
@@ -96,7 +98,7 @@ def handle_config_request(payload_bytes, device_id):
         return
     
     # check header
-    if not crypto_utils.check_header(payload_bytes, aes_key):
+    if not crypto_utils.decrypt_check_header(payload_bytes, aes_key):
         print(f"[MQTT] Błąd: Nieprawidłowy header w żądaniu konfiguracji od urządzenia {device_id}.")
         return
 
@@ -110,10 +112,23 @@ def send_config_update(device_id, aes_key):
 
     response_topic = TOPIC_DEVICE_CONFIG.format(device_id=device_id)
     payload = b"ESPHERA|" + int(time.time()).to_bytes(8, byteorder='little') + int(led_intensity).to_bytes(4, byteorder='little') + int(sleep_timeout).to_bytes(4, byteorder='little')
-    crypted_payload = crypto_utils.prepare_payload(payload, aes_key)
+    crypted_payload = crypto_utils.encrypt_data(payload, aes_key)
 
     client.publish(response_topic, crypted_payload)
-        
+
+
+def handle_log_message(payload_bytes, device_id):
+    print(f"Handling log message from device {device_id}")
+    device = database.get_device_auth(device_id)
+    aes_key = device['aes_key']
+    log = crypto_utils.decrypt_return_log(payload_bytes, aes_key)
+    if not log:
+        print(f"[MQTT] Błąd: Nieprawidłowy header w logu od urządzenia {device_id}.")
+        return
+    print(f"[MQTT] Log od urządzenia {device_id}: {log}")
+    database.log_event(device_id, "SYS", log)
+
+
 # --- CALLBACKI PAHO ---
 def on_connect(c, userdata, flags, rc):
     if rc == 0:
@@ -123,18 +138,28 @@ def on_connect(c, userdata, flags, rc):
         # c.subscribe(TOPIC_STATE)
         c.subscribe(TOPIC_PROVISIONING) 
         c.subscribe(TOPIC_DEVICE_ASK_CONFIG)
+        c.subscribe(TOPIC_LOG)  # subskrybuj logi od wszystkich urządzeń
     else:
         print(f"[MQTT] Błąd połączenia: {rc}")
 
 def on_message(c, userdata, msg):
+    
+    # print message
     topic = msg.topic
+
     try:
         if topic == TOPIC_PROVISIONING:
             handle_provisioning(msg.payload) # Przekazujemy bajty
             return
         elif topic.startswith("devices/") and topic.endswith("/ask_config"):
             device_id = int(topic.split('/')[1])
+            print("handling config request for device")
             handle_config_request(msg.payload, device_id)
+            return
+        elif topic.startswith("devices/") and topic.endswith("/logs"):
+            device_id = int(topic.split('/')[1])
+            print("handling log message for device")
+            handle_log_message(msg.payload, device_id)
             return
     except Exception as e:
         print(f"[MQTT] Błąd w obsłudze provisioning: {e}")

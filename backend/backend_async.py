@@ -71,7 +71,7 @@ async def send_audio_response(writer, file_path, aes_key):
                     break # Koniec pliku
 
                 # Szyfrujemy (IV + Cipher + Tag)
-                encrypted_packet = crypto_utils.encrypt_audio_chunk(data_chunk, aes_key)
+                encrypted_packet = crypto_utils.encrypt_data(data_chunk, aes_key)
                 
                 # Obliczamy rozmiar zaszyfrowanej paczki
                 packet_size = len(encrypted_packet)
@@ -123,7 +123,7 @@ async def handle_client(reader, writer):
             return
         aes_key = device['aes_key']
         print(f" [TCP] Sprawdzamy autoryzację dla {device_id}...")
-        if not crypto_utils.check_header(encrypted_auth, aes_key):
+        if not crypto_utils.decrypt_check_header(encrypted_auth, aes_key):
             print(f" [TCP] Błąd: Nieudana autoryzacja dla {device_id}.")
             return 
         
@@ -160,7 +160,7 @@ async def handle_client(reader, writer):
             encrypted_chunk = await reader.readexactly(chunk_size)
             
             # Odszyfrowujemy i dodajemy do bufora
-            decrypted_chunk = crypto_utils.decrypt_audio_chunk(encrypted_chunk, aes_key)
+            decrypted_chunk = crypto_utils.decrypt_data(encrypted_chunk, aes_key)
             full_audio_buffer.extend(decrypted_chunk)
 
         # --- KONIEC TRANSMISJI ---
