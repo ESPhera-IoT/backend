@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request, Form, Depends, Response, HTTPException, st
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import asyncio
 import database
@@ -18,6 +19,15 @@ from pydantic import BaseModel
 
 # --- KONFIGURACJA ---
 app = FastAPI(title="ESPhera IoT Server")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 templates = Jinja2Templates(directory="templates")
 
 # Konfiguracja JWT
@@ -241,7 +251,6 @@ async def api_register(user: UserRegister): # <--- Używamy modelu zamiast Form(
         raise HTTPException(status_code=500, detail="Database error")
     
     return {"message": "User created successfully"}
-
 
 
 @app.post("/api/login")
