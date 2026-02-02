@@ -13,6 +13,7 @@ import response_generator
 import database
 import mqtt_service
 import time
+import socket
 
 load_dotenv()
 
@@ -41,7 +42,6 @@ async def save_pcm_to_wav(pcm_data, filename):
         wav_file.setframerate(16000)
         wav_file.writeframes(pcm_data)
     print(f" [FILE] Zapisano plik audio: {filename}")
-
 
 
 async def send_audio_response(writer, file_path, aes_key):
@@ -194,10 +194,23 @@ async def handle_client(reader, writer):
 
 
 async def main():
-    server = await asyncio.start_server(handle_client, HOST, PORT)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    # Set socket options BEFORE binding/listening
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    # Bind socket
+    sock.bind((HOST, PORT))
+    sock.listen()
+
+    server = await asyncio.start_server(handle_client, sock=sock)
     print(f"=== BACKEND READY ({MY_LOCAL_IP}:{PORT}) ===")
     print(f"=== OCZEKIWANIE NA ESP32... ===")
-    
+
     async with server:
         await server.serve_forever()
 
